@@ -57,6 +57,8 @@ on dust-tolerant connectors). Approve the mockup before any code is written.
 | Template addition: per-section 3-role mini-lens | "Through Expert Lenses" italic block (3 roles, one sentence each) appended to 🔬 What's being done, 🛠️ Engineering questions, 💰 Funding landscape | Extends G pattern; Alex wants role perspectives across three thematic sections, not only Bottom Line | 2026-05-29 |
 | Template addition: ❓ Per-Question Role Analysis | New section after 🛠️; each engineering question gets a bolded restatement + 2–3 role bullets from `clai/.claude/Behavior/Roles.md` | Anchor: Alex's "particular attention to the system engineering question"; CLAUDE.md 5-role rule applied at question scope rather than event scope | 2026-05-29 |
 | Template addition: 🛒 Paying Customers / Demand | New section after 💰; 2–3 sentence prose intro + two-layer table (`Active funding` / `Active PO` / `Open RFP/RFI` / `Aspirational` status flags) | Anchor: Alex's "customers who are willing to pay for it right now" — surfaces demand-side procurement reality, distinct from supply-side grant funding | 2026-05-29 |
+| PDF rendering library | `PyMuPDF` (fitz) | `pdf2image`+poppler stalled on macOS 13 (Tier 3, source build of ~50 deps including cmake). PyMuPDF is pure-pip, zero system deps, ships text extract + PNG render in one library | 2026-05-29 |
+| Hidden-slide handling in PPTX | Use `min(python-pptx slide count, libreoffice page count)` and log mismatch | `python-pptx` counts hidden slides; libreoffice exports only visible. SPCAslides decks routinely have a hidden tail-slide | 2026-05-29 |
 
 ---
 
@@ -186,7 +188,7 @@ Stage-by-stage finish. Each milestone has its own fixture and binary pass gate.
 Branch + Progress file created when work starts on each.
 
 - [x] **M0** — Setup, contracts, .env <!-- progress: M0_SETUP -->
-- [ ] **M1** — Discover + Ingest: event grouping + per-asset dispatch (video/pptx/pdf) <!-- progress: M1_DISCOVER_INGEST -->
+- [x] **M1** — Discover + Ingest: event grouping + per-asset dispatch (video/pptx/pdf) <!-- progress: M1_DISCOVER_INGEST -->
 - [ ] **M2** — Transcribe: chunking, diarization, language, clamping <!-- progress: M2_TRANSCRIBE -->
 - [ ] **M3** — Visual + Deck render: scene-detect + VLM on frames, PPTX/PDF render to PNG <!-- progress: M3_VISUAL_DECKS -->
 - [ ] **M4** — Align: sectioning + per-deck fingerprint-match for presentation windows <!-- progress: M4_ALIGN -->

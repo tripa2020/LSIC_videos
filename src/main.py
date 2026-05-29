@@ -1,6 +1,6 @@
 """CLI entry point for the LSIC briefing pipeline.
 
-M0: --selftest only. Stage subcommands (--event, --papers, --all) land later.
+M0: --selftest. M1: --discover, --ingest. M2+ stages land later.
 """
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from pathlib import Path
 
 from src import contracts, util
 
@@ -130,15 +131,56 @@ def _check_table_alignment() -> int:
     return 3
 
 
+def discover_cmd(folder: Path) -> int:
+    from src import discover as discover_mod
+    result = discover_mod.discover(folder)
+    print(f"[discover] {len(result['events'])} events, {len(result['papers'])} papers")
+    for e in result["events"]:
+        kinds = ", ".join(a.kind for a in e.assets)
+        print(f"  {e.event_id:24s} ({len(e.assets)} assets) [{kinds}]")
+    for p in result["papers"]:
+        print(f"  paper {p.lsic_id:5d}  {p.path.name}")
+    return 0
+
+
+def ingest_cmd(event_id: str | None, all_flag: bool) -> int:
+    from src import ingest as ingest_mod
+    if all_flag:
+        summary = ingest_mod.ingest_all()
+        print(f"[ingest] {summary['events']} events + {summary['papers']} papers OK")
+    elif event_id:
+        result = ingest_mod.ingest_one_event(event_id)
+        print(f"[ingest] {result.event_id} → {result.workdir}")
+        if result.audio_path:
+            print(f"         audio: {result.audio_path} ({result.duration_sec:.0f} s)")
+    else:
+        print("--ingest requires --event <id> or --all", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="src.main")
-    parser.add_argument("--selftest", action="store_true",
-                        help="M0 smoke test — imports, pydantic, table alignment")
+    g = parser.add_mutually_exclusive_group(required=True)
+    g.add_argument("--selftest", action="store_true",
+                   help="M0 smoke test — imports, pydantic, table alignment")
+    g.add_argument("--discover", action="store_true",
+                   help="M1: scan LSIC_Downloads/, write work/events.json")
+    g.add_argument("--ingest", action="store_true",
+                   help="M1: per-asset ingest (use --event or --all)")
+    parser.add_argument("folder", nargs="?", default="LSIC_Downloads", type=Path,
+                        help="source folder for --discover (default: LSIC_Downloads)")
+    parser.add_argument("--event", type=str, help="event_id for --ingest")
+    parser.add_argument("--all", action="store_true",
+                        help="--ingest --all: ingest every event + paper")
     args = parser.parse_args()
 
     if args.selftest:
         return selftest()
-
+    if args.discover:
+        return discover_cmd(args.folder)
+    if args.ingest:
+        return ingest_cmd(args.event, args.all)
     parser.print_help()
     return 1
 
