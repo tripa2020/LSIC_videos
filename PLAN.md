@@ -185,7 +185,7 @@ no emojis). Useful as a stylistic data point only; not used for acceptance diff.
 Stage-by-stage finish. Each milestone has its own fixture and binary pass gate.
 Branch + Progress file created when work starts on each.
 
-- [ ] **M0** — Setup, contracts, .env <!-- progress: M0_SETUP -->
+- [x] **M0** — Setup, contracts, .env <!-- progress: M0_SETUP -->
 - [ ] **M1** — Discover + Ingest: event grouping + per-asset dispatch (video/pptx/pdf) <!-- progress: M1_DISCOVER_INGEST -->
 - [ ] **M2** — Transcribe: chunking, diarization, language, clamping <!-- progress: M2_TRANSCRIBE -->
 - [ ] **M3** — Visual + Deck render: scene-detect + VLM on frames, PPTX/PDF render to PNG <!-- progress: M3_VISUAL_DECKS -->
