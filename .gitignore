@@ -1,0 +1,19 @@
+# environment
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# pipeline runtime artifacts
+work/
+
+# huge source binaries — not tracked
+LSIC_Downloads/
+
+# external tooling — separate concern from this project
+clai/
+
+# IDE
+.idea/
+.vscode/

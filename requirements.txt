@@ -1,0 +1,13 @@
+pydantic>=2.7,<3
+python-dotenv>=1.0
+
+# stage 2 onward — installed at M0 but not imported until later milestones
+google-genai>=0.5
+anthropic>=0.40
+python-pptx>=1.0
+pypdf>=4.0
+pdf2image>=1.17
+scenedetect>=0.6
+opencv-python>=4.10
+imagehash>=4.3
+Pillow>=10.0
