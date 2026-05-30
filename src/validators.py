@@ -152,6 +152,66 @@ def validate_visual(workdir: Path) -> ValidationResult:
     return ValidationResult(passed=True)
 
 
+def validate_alignment(workdir: Path) -> ValidationResult:
+    """M4 align workdir checks: schema, evidence refs resolve, duration sanity."""
+    from src import util as _util
+    from src.contracts import AlignmentResult, Evidence
+    issues: list[ValidationIssue] = []
+    aligned_path = workdir / _util.STAGE_ALIGNED / "aligned.json"
+    evidence_path = workdir / _util.STAGE_ALIGNED / "evidence.json"
+    if not _util.is_complete(aligned_path):
+        issues.append(ValidationIssue(
+            rule="aligned_complete", offending=str(aligned_path),
+            suggestion="run --align --event <id>"))
+        return ValidationResult(passed=False, issues=issues)
+    if not _util.is_complete(evidence_path):
+        issues.append(ValidationIssue(
+            rule="evidence_complete", offending=str(evidence_path)))
+        return ValidationResult(passed=False, issues=issues)
+
+    try:
+        aligned = AlignmentResult.model_validate_json(aligned_path.read_text())
+    except Exception as e:
+        return ValidationResult(passed=False, issues=[ValidationIssue(
+            rule="aligned_schema", suggestion=str(e)[:120])])
+    try:
+        ev_raw = json.loads(evidence_path.read_text())
+        evidence = [Evidence.model_validate(e) for e in ev_raw]
+    except Exception as e:
+        return ValidationResult(passed=False, issues=[ValidationIssue(
+            rule="evidence_schema", suggestion=str(e)[:120])])
+
+    ev_ids = {e.evidence_id for e in evidence}
+
+    # duration coverage
+    if aligned.sections:
+        last_end = max(s.end for s in aligned.sections)
+        if last_end > aligned.duration_sec + 1:
+            issues.append(ValidationIssue(
+                rule="section_end_within_duration",
+                offending=f"last section end={last_end:.1f}s, duration={aligned.duration_sec:.1f}s"))
+
+    # every evidence_id in sections resolves
+    for i, sec in enumerate(aligned.sections):
+        for eid in sec.evidence_ids:
+            if eid not in ev_ids:
+                issues.append(ValidationIssue(
+                    section=f"section[{i}]", rule="evidence_id_resolves",
+                    offending=eid))
+                break
+
+    # presentations don't overlap
+    pres = sorted(aligned.presentations, key=lambda p: p.start)
+    for a, b in zip(pres, pres[1:]):
+        if a.end > b.start:
+            issues.append(ValidationIssue(
+                rule="presentations_non_overlapping",
+                offending=f"{a.asset_id} ends {a.end:.0f}s, {b.asset_id} starts {b.start:.0f}s"))
+            break
+
+    return ValidationResult(passed=not issues, issues=issues)
+
+
 def validate_transcript(path: Path) -> ValidationResult:
     """M2 transcript.json checks: schema, monotonic, non-overlap, coverage."""
     if not path.exists():

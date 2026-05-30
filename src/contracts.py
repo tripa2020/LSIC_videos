@@ -94,6 +94,15 @@ class Section(BaseModel):
     keyframes: list[Caption] = []
     speakers: list[str] = []
     languages: list[str] = []
+    evidence_ids: list[str] = []   # refs into evidence.json (M4)
+
+
+class AlignmentResult(BaseModel):
+    """M4 output: sections + presentations + duration sanity."""
+    event_id: str
+    duration_sec: float
+    sections: list["Section"]
+    presentations: list["Presentation"]
 
 
 class TRLRow(BaseModel):

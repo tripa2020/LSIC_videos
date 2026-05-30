@@ -175,6 +175,23 @@ def transcribe_cmd(event_id: str | None, max_sec: float | None) -> int:
     return 0
 
 
+def align_cmd(event_id: str | None) -> int:
+    """M4: sectioning + per-deck fingerprint match + Evidence Object emission."""
+    from src import align as align_mod
+    if not event_id:
+        print("--align requires --event <id>", file=sys.stderr)
+        return 1
+    result = align_mod.align(event_id)
+    print(f"[align] {event_id} → work/events/{event_id}/04_aligned/")
+    print(f"        {len(result.sections)} sections · "
+          f"{len(result.presentations)} presentations")
+    for p in result.presentations:
+        print(f"          • {p.asset_id} \"{p.title[:50]}\" "
+              f"[{int(p.start//60):02d}:{int(p.start%60):02d} → "
+              f"{int(p.end//60):02d}:{int(p.end%60):02d}] score={p.match_score:.0f}")
+    return 0
+
+
 def visual_cmd(event_id: str | None) -> int:
     """M3: hybrid-sampled keyframe extraction + Gemini VLM captioning."""
     from src import visual as visual_mod
@@ -267,6 +284,8 @@ def main() -> int:
                    help="M2: ASR via Gemini (use --event, optional --max-sec)")
     g.add_argument("--visual", action="store_true",
                    help="M3: hybrid keyframe extraction + Gemini VLM captioning")
+    g.add_argument("--align", action="store_true",
+                   help="M4: sectioning + Evidence Object emission")
     g.add_argument("--synthesize", action="store_true",
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
@@ -296,6 +315,8 @@ def main() -> int:
         return transcribe_cmd(args.event, args.max_sec)
     if args.visual:
         return visual_cmd(args.event)
+    if args.align:
+        return align_cmd(args.event)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:
