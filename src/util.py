@@ -1,12 +1,16 @@
 """Utility functions used across stages.
 
-Tiny, no I/O, no side effects — these are imported everywhere.
+Tiny helpers — table alignment, string cleanup, atomic artifact writes.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
 
 
 def strip_fences(s: str) -> str:
@@ -79,3 +83,54 @@ def align_table(rows: list[list[str]]) -> str:
     out = [fmt_row(rows[0]), divider()]
     out.extend(fmt_row(row) for row in rows[1:])
     return "\n".join(out)
+
+
+# ---- atomic artifact writes + manifest gate (M2.6) ----
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write text to <path>.tmp then rename. Same-filesystem rename is atomic.
+
+    Crashes mid-write leave only the .tmp file (which the manifest gate
+    will not promote to 'complete'). Never leaves a half-written artifact
+    that downstream cache-skip would falsely trust.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def write_with_manifest(path: Path, text: str, stage: str,
+                        input_hash: Optional[str] = None) -> None:
+    """Atomically write the artifact, then write its sibling .manifest.json."""
+    atomic_write_text(path, text)
+    manifest = {
+        "stage": stage,
+        "status": "complete",
+        "artifact": path.name,
+        "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    if input_hash is not None:
+        manifest["input_hash"] = input_hash
+    atomic_write_text(
+        path.with_suffix(path.suffix + ".manifest.json"),
+        json.dumps(manifest, indent=2),
+    )
+
+
+def is_complete(path: Path) -> bool:
+    """Cache-skip gate: artifact exists AND its manifest says status=complete.
+
+    Plain `path.exists()` lies after a kill mid-write. This check is the
+    minimum safe gate for stage-skip.
+    """
+    if not path.exists():
+        return False
+    manifest_path = path.with_suffix(path.suffix + ".manifest.json")
+    if not manifest_path.exists():
+        return False
+    try:
+        m = json.loads(manifest_path.read_text())
+        return m.get("status") == "complete"
+    except (json.JSONDecodeError, OSError):
+        return False

@@ -21,7 +21,7 @@ from google import genai
 from google.genai import types
 
 from src import util
-from src.contracts import IngestResult, Segment
+from src.contracts import IngestResult, Segment  # noqa: F401 (Segment used above)
 
 
 WORK_ROOT = Path("work")
@@ -64,11 +64,23 @@ class GeminiTranscriber:
         chunks = self._chunk_audio(audio_path, workdir)
         all_segs: list[Segment] = []
         for i, (chunk_path, offset) in enumerate(chunks, start=1):
-            print(f"  [transcribe] chunk {i}/{len(chunks)} @ {offset:.0f}s ({chunk_path.name})…",
-                  flush=True)
-            segs = self._transcribe_chunk(chunk_path, offset)
+            chunk_cache = chunk_path.with_suffix(".segments.json")
+            if chunk_cache.exists():
+                # Resumable: prior run completed this chunk's API call. Skip Gemini.
+                segs = [Segment.model_validate(s) for s in json.loads(chunk_cache.read_text())]
+                print(f"  [transcribe] chunk {i}/{len(chunks)} @ {offset:.0f}s "
+                      f"({chunk_path.name})… CACHED ({len(segs)} segments)", flush=True)
+            else:
+                print(f"  [transcribe] chunk {i}/{len(chunks)} @ {offset:.0f}s "
+                      f"({chunk_path.name})…", flush=True)
+                segs = self._transcribe_chunk(chunk_path, offset)
+                # Per-chunk atomic write so a kill mid-loop never costs more
+                # than the in-flight chunk's API spend on rerun.
+                chunk_cache.write_text(json.dumps(
+                    [s.model_dump(mode="json") for s in segs], indent=2,
+                ))
+                print(f"    + {len(segs)} segments")
             all_segs.extend(segs)
-            print(f"    + {len(segs)} segments")
 
         for s in all_segs:
             s.start = max(0.0, min(s.start, duration))
@@ -107,7 +119,13 @@ class GeminiTranscriber:
         resp = self.client.models.generate_content(
             model=self.model,
             contents=[ASR_PROMPT, audio_file],
-            config=types.GenerateContentConfig(temperature=0.0),
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                # Disable thinking — verbatim ASR doesn't benefit from it, and
+                # thinking causes 5-10x slowdown on long audio chunks (observed
+                # 25+ min stall on a 10-min chunk that should take ~1 min).
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
         )
         raw = util.strip_fences(resp.text or "")
         try:
@@ -130,13 +148,15 @@ class GeminiTranscriber:
 def transcribe(audio_path: Path, duration: float, workdir: Path,
                transcriber: Optional[Transcriber] = None) -> list[Segment]:
     cache = workdir / "transcript.json"
-    if cache.exists():
+    if util.is_complete(cache):
         return [Segment.model_validate(s) for s in json.loads(cache.read_text())]
     transcriber = transcriber or GeminiTranscriber()
     segs = transcriber.transcribe(audio_path, duration, workdir)
-    cache.write_text(json.dumps(
-        [s.model_dump(mode="json") for s in segs], indent=2,
-    ))
+    util.write_with_manifest(
+        cache,
+        json.dumps([s.model_dump(mode="json") for s in segs], indent=2),
+        stage="transcribe",
+    )
     return segs
 
 

@@ -212,6 +212,26 @@ def validate_notes_cmd(path: str, strict: bool) -> int:
     return 0 if result.passed else 1
 
 
+def validate_ingest_cmd(event_id: str | None) -> int:
+    from src.validators import validate_ingest, render_result
+    if not event_id:
+        print("--validate-ingest requires --event <id>", file=sys.stderr)
+        return 1
+    result = validate_ingest(Path("work/events") / event_id)
+    print(render_result(result))
+    return 0 if result.passed else 1
+
+
+def validate_transcript_cmd(event_id: str | None) -> int:
+    from src.validators import validate_transcript, render_result
+    if not event_id:
+        print("--validate-transcript requires --event <id>", file=sys.stderr)
+        return 1
+    result = validate_transcript(Path("work/events") / event_id / "transcript.json")
+    print(render_result(result))
+    return 0 if result.passed else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="src.main")
     g = parser.add_mutually_exclusive_group(required=True)
@@ -227,6 +247,10 @@ def main() -> int:
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
                    help="run validate_notes on a notes.md file")
+    g.add_argument("--validate-ingest", action="store_true",
+                   help="run validate_ingest on an event workdir (use --event)")
+    g.add_argument("--validate-transcript", action="store_true",
+                   help="run validate_transcript on an event's transcript.json (use --event)")
     parser.add_argument("folder", nargs="?", default="LSIC_Downloads", type=Path,
                         help="source folder for --discover (default: LSIC_Downloads)")
     parser.add_argument("--event", type=str, help="event_id for --ingest/--transcribe/--synthesize")
@@ -250,6 +274,10 @@ def main() -> int:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:
         return validate_notes_cmd(args.validate_notes, args.strict)
+    if args.validate_ingest:
+        return validate_ingest_cmd(args.event)
+    if args.validate_transcript:
+        return validate_transcript_cmd(args.event)
     parser.print_help()
     return 1
 

@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from src import pdf_handler, pptx_handler
+from src import pdf_handler, pptx_handler, util
 from src.contracts import Asset, Event, IngestResult
 
 
@@ -26,7 +26,7 @@ def ingest_event(event: Event, work_root: Path = WORK_ROOT) -> IngestResult:
     workdir = work_root / "events" / event.event_id
     workdir.mkdir(parents=True, exist_ok=True)
     manifest = workdir / "manifest.json"
-    if manifest.exists():
+    if util.is_complete(manifest):
         return IngestResult.model_validate_json(manifest.read_text())
 
     audio_path: Optional[Path] = None
@@ -60,7 +60,7 @@ def ingest_event(event: Event, work_root: Path = WORK_ROOT) -> IngestResult:
         width=width,
         height=height,
     )
-    manifest.write_text(result.model_dump_json(indent=2))
+    util.write_with_manifest(manifest, result.model_dump_json(indent=2), stage="ingest")
     return result
 
 

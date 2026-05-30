@@ -96,6 +96,62 @@ def validate_notes(path: Path, *, strict: bool = False) -> ValidationResult:
     return ValidationResult(passed=not issues, issues=issues)
 
 
+def validate_ingest(workdir: Path) -> ValidationResult:
+    """M1 ingest workdir checks: manifest complete, audio sane, deck indexes parse."""
+    issues: list[ValidationIssue] = []
+    from src import util as _util  # local to avoid circular at module load
+    manifest_path = workdir / "manifest.json"
+    if not _util.is_complete(manifest_path):
+        issues.append(ValidationIssue(
+            rule="manifest_complete", offending=str(manifest_path),
+            suggestion="run --ingest --event <id>"))
+        return ValidationResult(passed=False, issues=issues)
+
+    try:
+        from src.contracts import IngestResult
+        ing = IngestResult.model_validate_json(manifest_path.read_text())
+    except Exception as e:
+        return ValidationResult(passed=False, issues=[ValidationIssue(
+            rule="manifest_schema", suggestion=str(e)[:120])])
+
+    # audio.wav format (if event has video)
+    if ing.audio_path is not None:
+        audio_path = Path(ing.audio_path)
+        if not audio_path.exists():
+            issues.append(ValidationIssue(
+                rule="audio_exists", offending=str(audio_path)))
+        elif ing.duration_sec <= 0:
+            issues.append(ValidationIssue(
+                rule="duration_positive",
+                offending=f"duration_sec={ing.duration_sec}"))
+
+    # every deck dir must have an index file
+    decks_dir = workdir / "decks"
+    if decks_dir.is_dir():
+        for d in sorted(decks_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            slide_idx = d / "slide_index.json"
+            doc_idx = d / "doc_index.json"
+            if not slide_idx.exists() and not doc_idx.exists():
+                issues.append(ValidationIssue(
+                    section="decks", rule="deck_index_missing",
+                    offending=d.name,
+                    suggestion="re-run ingest for this asset"))
+
+    return ValidationResult(passed=not issues, issues=issues)
+
+
+def validate_visual(workdir: Path) -> ValidationResult:
+    """M3 stub. Full implementation lands when M3 runs."""
+    cap = workdir / "captions.json"
+    if not cap.exists():
+        return ValidationResult(passed=False, issues=[ValidationIssue(
+            rule="captions_exist", offending=str(cap),
+            suggestion="M3 (visual) not yet run for this event")])
+    return ValidationResult(passed=True)
+
+
 def validate_transcript(path: Path) -> ValidationResult:
     """M2 transcript.json checks: schema, monotonic, non-overlap, coverage."""
     if not path.exists():
