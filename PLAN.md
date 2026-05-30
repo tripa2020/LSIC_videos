@@ -61,6 +61,13 @@ on dust-tolerant connectors). Approve the mockup before any code is written.
 | Hidden-slide handling in PPTX | Use `min(python-pptx slide count, libreoffice page count)` and log mismatch | `python-pptx` counts hidden slides; libreoffice exports only visible. SPCAslides decks routinely have a hidden tail-slide | 2026-05-29 |
 | ASR backend | Gemini 2.5 Flash via `google-genai`; behind `Transcriber` protocol | Cheapest (~$0.16/hr), single API for M2+M3, decent diarization on 2-3 clean speakers; protocol enables one-file swap to Deepgram/WhisperX later | 2026-05-30 |
 | Tail-clamp segment dropping | Drop segments where `end <= start` after timestamp clamp | Gemini occasionally hallucinates segments past the clip boundary; clamping flattens them to zero-duration which carry no signal | 2026-05-30 |
+| Information Architecture Contract | Mockup at `golden/2026-03-26_event_mockup.md` is the canonical product shape; `validators.py` enforces structure deterministically | Pipeline is correct only when output satisfies the contract — running end-to-end is not the same as producing a verifiable briefing | 2026-05-30 |
+| Validation philosophy | Every stage has four gates: **Schema** (pydantic) · **Evidence** (claims resolve to sources) · **Coverage** (required sections present) · **Operational** (cache, cost, retry) | Manual review reserved for subjective quality only; structural correctness must be code-enforced | 2026-05-30 |
+| Evidence Object | Universal claim primitive emitted at M4; every claim in M5's notes.md routes through an `evidence_id` with kind, source_id, timestamps, speaker, asset, text, confidence, tags | Prevents fabricated-but-plausible briefing content; makes citations machine-verifiable | 2026-05-30 |
+| Hybrid keyframe sampling (M3) | Trigger on scene-change OR every-60s safety OR slide-text delta OR audio cue ("this equation/diagram/figure", "as shown") | Scene-change-only misses subtle slide builds (animated bullets, equation reveals) and long static frames; hybrid is cost-defensible insurance (~+30% VLM calls) | 2026-05-30 |
+| Citation grounding (M5) | Every `[mm:ss]` in notes.md must map to an evidence object within ±5s; Claude prompt instructed to omit unsupported citations | Prevents hallucinated citations; pairs with Evidence Object to make the briefing falsifiable | 2026-05-30 |
+| Atomic artifact writes | Stages write `<artifact>.tmp` then rename + write `<artifact>.manifest.json` with `status: complete`; cache-skip requires manifest complete AND validator pass AND input/config hash match | "Skip if file exists" lies after a kill -9 mid-write; manifest pattern is robust | 2026-05-30 |
+| Validators consolidation | One `src/validators.py` with one function per stage (`validate_notes`, `validate_transcript`, `validate_ingest`, `validate_alignment`) rather than 6 separate modules | Review proposed 6 files; we keep it one to minimize file sprawl while preserving enforcement | 2026-05-30 |
 
 ---
 
@@ -111,6 +118,75 @@ no speakers.
 
 ---
 
+## Information Architecture & Validation Contract
+
+The mockup at `golden/2026-03-26_event_mockup.md` is the canonical product
+shape. **The pipeline is correct only when generated briefings satisfy this
+contract — running end-to-end is not the same as producing a verifiable
+briefing.**
+
+### Core principle
+
+> The pipeline produces a verifiable technical briefing, not a loose summary.
+
+Each high-value statement must be backed by at least one **Evidence Object**
+derived from a transcript segment, slide caption, source asset, or explicit
+metadata. LLM calls synthesize and organize; deterministic validators
+decide acceptance.
+
+### Evidence Object
+
+All claims used in the final briefing route through an evidence object,
+emitted at M4 alignment alongside `aligned.json`:
+
+```json
+{
+  "evidence_id": "ev_000123",
+  "kind": "transcript|slide|asset|metadata",
+  "source_id": "segment_0004|caption_0012|asset_3107",
+  "timestamp_start": 272.0,
+  "timestamp_end": 294.0,
+  "speaker_id": "B",
+  "source_asset": "3107-Amphenol Lunar Interconnects.pdf",
+  "text": "...",
+  "confidence": 0.0,
+  "tags": ["constraint", "funding", "trl", "open_question"]
+}
+```
+
+`evidence_id` is stable across runs (hash of `kind` + `source_id` + start).
+Sections in `aligned.json` reference `evidence_id`s rather than embedding
+raw segments. M5's per-section Claude prompts pass the relevant evidence;
+Claude is instructed to omit any `[mm:ss]` it cannot ground in a passed
+`evidence_id`.
+
+### Four validation gates per stage
+
+| Gate | What it checks |
+|---|---|
+| **Schema** | Artifact matches pydantic model |
+| **Evidence** | Claims, citations, timestamps, assets resolve to sources |
+| **Coverage** | Required briefing sections + expected content types present |
+| **Operational** | Cache, cost, retry, runtime behavior acceptable |
+
+Manual review is reserved for subjective quality only. Structural correctness,
+citation coverage, timestamp validity, asset existence, and section
+completeness are code-enforced via `src/validators.py`.
+
+### Skip-and-stub rule
+
+Required sections that lack evidence must still appear, with an italic
+`*Not applicable to this event — <one-line reason>.*` line. TOC and body
+must match exactly.
+
+### No-fabricated-placeholder rule
+
+Production mode (`validate_notes --strict`) rejects unresolved placeholders
+(`$X.X`, `~$YY`, `TBD`, "fewer than five" without source). These are allowed
+only in `golden/` mockups.
+
+---
+
 ## Repo Layout (greenfield, to create)
 
 ```
@@ -126,8 +202,9 @@ LSIC_videos/
 │   ├── transcribe.py        ≤150 LOC  — audio work (chunking, diarization, lang)
 │   ├── visual.py            ≤120 LOC  — video frame scene-detect + VLM
 │   ├── align.py             ≤120 LOC  — sectioning + per-deck fingerprint match
-│   ├── synthesize.py        ≤180 LOC  — event + paper templates
-│   ├── contracts.py                   — pydantic models (the seams)
+│   ├── synthesize.py        ≤180 LOC  — event + paper templates, citation grounding
+│   ├── validators.py        ≤200 LOC  — validate_notes / _transcript / _ingest / _alignment
+│   ├── contracts.py                   — pydantic models (the seams) + Evidence + ValidationResult
 │   ├── util.py                        — strip_fences, mm:ss formatter
 │   └── main.py                        — spine, one event at a time
 ├── LSIC_Downloads/          source assets (flat, gitignored)
@@ -192,11 +269,13 @@ Branch + Progress file created when work starts on each.
 - [x] **M0** — Setup, contracts, .env <!-- progress: M0_SETUP -->
 - [x] **M1** — Discover + Ingest: event grouping + per-asset dispatch (video/pptx/pdf) <!-- progress: M1_DISCOVER_INGEST -->
 - [x] **M2** — Transcribe: chunking, diarization, language, clamping <!-- progress: M2_TRANSCRIBE -->
-- [ ] **M3** — Visual + Deck render: scene-detect + VLM on frames, PPTX/PDF render to PNG <!-- progress: M3_VISUAL_DECKS -->
-- [ ] **M4** — Align: sectioning + per-deck fingerprint-match for presentation windows <!-- progress: M4_ALIGN -->
-- [ ] **M5** — Synthesize: per-event briefing with per-presentation sub-sections <!-- progress: M5_SYNTHESIZE -->
+- [ ] **M2.5** — Steel thread: `validators.py` + thin `synthesize.py` → first end-to-end notes.md <!-- progress: M2.5_STEEL_THREAD -->
+- [ ] **M2.6** — Retrofit M1+M2: atomic writes + manifest gate + validate_ingest/_transcript <!-- progress: M2.6_RETROFIT -->
+- [ ] **M3** — Visual + Deck render: **hybrid sampling** (scene + 60s safety + slide-text delta + audio cue) + VLM <!-- progress: M3_VISUAL_DECKS -->
+- [ ] **M4** — Align + **Evidence Object** emission (`aligned.json` + `evidence.json`) <!-- progress: M4_ALIGN -->
+- [ ] **M5** — Synthesize: per-event briefing with **citation grounding** (every `[mm:ss]` resolves to evidence_id) <!-- progress: M5_SYNTHESIZE -->
 - [ ] **M5b** — Papers: standalone-paper template for reference PDFs (2994, 3148, 3160) <!-- progress: M5B_PAPERS -->
-- [ ] **M6** — Hardening: retry/backoff, cost log, resume-from-cache verified <!-- progress: M6_HARDENING -->
+- [ ] **M6** — Hardening: retry/backoff, cost log, resume-from-cache verified, `--dry-run`/`--strict` flags <!-- progress: M6_HARDENING -->
 
 ### Per-milestone deliverables, runs, and pass gates
 
@@ -233,53 +312,102 @@ process the full event.
   3. `language` field populated (`en` expected throughout).
   4. Last segment's `end ≤ duration_sec` (no hallucinated tail).
 
-#### M3 — Visual + Deck render (≤90 min)
+#### M2.5 — Steel thread (≤90 min)  ← NEW
 - **Deliverable.**
-  - Video: scene-change keyframes only, phash dedup at Hamming ≤ 4, downscale to 1024 px, Gemini VLM returns `{visible_text, description, has_equation, has_diagram}`, skip+log on failure.
-  - Decks: PPTX/PDF page renders already in `work/events/<id>/decks/<asset_id>/`; index slide text + speaker notes for fingerprinting.
-- **Run.** `python -m src.visual work/events/lsic_2026-03-26/`
-- **Pass criteria:**
-  1. Frame count ≤ scene count for video.
-  2. `captions.json` validates against `Caption` schema.
-  3. Eyeball: distinct video frames; no near-duplicates.
-  4. Each deck has a `slide_index.json` with `{slide_n, text, speaker_notes, png_path}` per slide.
+  - `src/validators.py` — `validate_notes(path, *, strict)`, `validate_transcript(path)`. Steel-thread mode allows ungrounded citations; production mode forbids `$X.X`/`~$YY`/`TBD`.
+  - `src/synthesize.py` (replace stub) — minimal **single** Claude Sonnet 4.6 call: full transcript in, full notes.md out using the 15-section canonical template + skip-and-stub fallback. (Per-section calls + Evidence-grounded citations come at full M5.)
+  - `src/main.py` — `--synthesize --event <id> [--slice N]` and `--validate-notes <path>` flags.
+- **Run.**
+  - `.venv/bin/python -m src.main --synthesize --event lsic_2026-03-26 --slice 300`
+  - `.venv/bin/python -m src.main --validate-notes work/events/lsic_2026-03-26/transcript_slice_300s/notes.md`
+- **Pass criteria.**
+  1. `notes.md` exists at the slice's workdir.
+  2. All 15 canonical sections present in canonical order.
+  3. TOC matches body headings exactly (catches the Phase-2-era 🛒 mismatch class).
+  4. ≥1 `[mm:ss]` citation in body (steel-thread mode — full grounding deferred to M5).
+  5. `validate_notes.py` exits 0 in steel-thread mode (allows placeholders).
+  6. `validate_transcript.py` exits 0 on existing `transcript_slice_300s/transcript.json`.
+- **Goal.** Prove the seam from transcript → notes.md works structurally BEFORE building M3/M4 polish. Catches integration drift early instead of at full-M5 launch.
+- **Cost.** ~$0.04/run (5-min transcript ~1500 input + ~2500 output tokens at Sonnet 4.6 pricing).
 
-#### M4 — Align (≤90 min) — pure Python, no API
+#### M2.6 — Retrofit M1+M2: atomic writes + validators (≤45 min)  ← NEW
 - **Deliverable.**
-  - Section cut on silence gap >2.5 s OR 450-word cap.
+  - Add `validate_ingest(workdir)` to `validators.py`.
+  - Retrofit `src/ingest.py` to write `<artifact>.tmp` then rename + `manifest.json` with `status: complete`.
+  - Retrofit `src/transcribe.py` same atomic-write pattern for `transcript.json`.
+  - Update cache-skip in both stages: must require manifest `complete` AND validator pass AND input/config hash match.
+  - Add `--validate-ingest --event <id>` and `--validate-transcript --event <id>` flags.
+- **Run.** Kill `--ingest` with `kill -9` mid-render of a fresh event; rerun must detect incomplete manifest and redo only that step.
+- **Pass criteria.**
+  1. Mid-stage kill → rerun completes correctly (no half-written artifact treated as complete).
+  2. `validate_ingest` passes: `audio.wav` duration within 0.5s of video, all deck `slide_index.json`/`doc_index.json` present + parse.
+  3. `validate_transcript` passes: monotonic, no zero-dur, all `[start, end] ≤ duration_sec`, speakers consistent within chunks, no segment overlap > 0.25s (warn-not-fail).
+  4. `--selftest` still passes.
+
+#### M3 — Visual + Deck render (≤90 min) [HYBRID SAMPLING]
+- **Deliverable.**
+  - Video keyframe extraction with **hybrid sampling** (any-of trigger):
+    - Scene change (`pyscenedetect`, threshold 27.0)
+    - 60-second safety net (don't miss long static segments)
+    - Slide-text delta (visible_text changed significantly from prior keyframe — second-pass after first VLM round)
+    - Audio cue (transcript contains "this equation", "this diagram", "as shown", "look at this", "in this figure", etc.)
+  - All keyframes phash-deduped at Hamming ≤ 4, downscaled to 1024 px.
+  - Gemini VLM returns `{visible_text, description, has_equation, has_diagram}` per kept frame.
+  - VLM failure: frame retained with `caption_status: "failed"`, not silently dropped.
+  - Decks already rendered in M1 (PPTX/PDF page renders); index slide text + speaker notes for M4 fingerprinting.
+- **Run.** `python -m src.main --visual --event lsic_2026-03-26`
+- **Pass criteria:**
+  1. `captions.json` validates against `Caption` schema.
+  2. Each kept frame has a `trigger` tag indicating which hybrid rule fired (scene/safety/text-delta/audio-cue).
+  3. Frame count > scene count (hybrid adds safety frames by definition).
+  4. Each deck has `slide_index.json` (PPTX) or `doc_index.json` (PDF) with `{slide_n, text, speaker_notes, png_path}`.
+  5. validate_visual (new in `validators.py`) passes.
+
+#### M4 — Align + Evidence Object emission (≤90 min) — pure Python, no API
+- **Deliverable.**
+  - Section cut on silence gap >2.5s OR 450-word cap.
   - Video keyframe attach by time range; orphan reassign to nearest section midpoint.
-  - **New: per-deck fingerprint match.** For each guest deck, compute TF-IDF over slide text vs ASR transcript windows; assign each deck the contiguous time range with highest match density. Output `presentations[]` in `aligned.json`.
+  - Per-deck TF-IDF fingerprint match for presentation windows; assign each deck the contiguous time range with highest match density. Output `presentations[]` in `aligned.json`.
   - Carry `speaker_id` and `language` per segment into section payload.
-- **Run.** `python -m src.align work/events/lsic_2026-03-26/`
+  - **NEW: emit `evidence.json`** alongside `aligned.json`. Each Evidence object: stable `evidence_id` (hash of kind + source_id + start), `kind`, `source_id`, timestamps, speaker, source_asset, text, confidence, tags.
+  - Sections in `aligned.json` reference `evidence_id`s rather than embedding raw segments.
+- **Run.** `python -m src.main --align --event lsic_2026-03-26`
 - **Pass criteria:**
   1. `aligned.json` validates against `Section` schema.
-  2. Every section has `start, end, transcript, keyframes, speakers, languages`.
-  3. `presentations[]` contains 3 non-overlapping windows for the 2026-03-26 event (Amphenol, Nunez, Yank Tech).
-  4. Each presentation window's transcript contains ≥3 distinct slide-text fingerprints from its assigned deck.
+  2. `evidence.json` validates: every entry has all required fields + stable `evidence_id`.
+  3. Every section's `evidence_id` list resolves to entries in `evidence.json`.
+  4. Sum of section durations within 1s of `duration_sec`.
+  5. No keyframe assigned to more than one section.
+  6. `presentations[]` contains 3 non-overlapping windows for the 2026-03-26 event (Amphenol, Nunez, Yank Tech).
+  7. Each presentation window's transcript contains ≥3 distinct slide-text fingerprints from its assigned deck.
+  8. validate_alignment (new in `validators.py`) passes.
 
-#### M5 — Synthesize: per-event briefing (≤2 h)
+#### M5 — Synthesize: per-event briefing with citation grounding (≤2 h)
 - **Deliverable.**
-  - Per-presentation Claude calls (TL;DR + claims + open questions per deck) using assigned video time window + deck text + speaker notes.
-  - Per-section Claude calls over the full event for every thematic section in the Output Contract.
+  - Per-presentation Claude calls (TL;DR + claims + open questions per deck) using assigned video time window + deck text + speaker notes + **relevant `evidence_id`s passed in prompt**.
+  - Per-section Claude calls for the thematic sections, with relevant evidence objects passed in.
+  - **Per-section prompt instruction: "Only cite `[mm:ss]` if you can ground it in a passed `evidence_id`. If unsure, omit the citation entirely."**
   - 🎯 Through 5 Expert Lenses block (5 roles from `clai/.claude/Behavior/Roles.md`) under Bottom Line.
-  - **Through Expert Lenses 3-role mini-blocks** appended to 🔬 What's being done, 🛠️ Engineering questions, 💰 Funding landscape.
-  - **❓ Per-Question Role Analysis** section: one sub-block per 🛠️ question with 2–3 role takes.
-  - **🛒 Paying Customers / Demand** section: 2–3 sentence prose intro + two-layer table with status flags (`Active funding` / `Active PO` / `Open RFP/RFI` / `Aspirational`).
+  - Through Expert Lenses 3-role mini-blocks appended to 🔬, 🛠️, 💰.
+  - ❓ Per-Question Role Analysis: one sub-block per 🛠️ question with 2–3 role takes.
+  - 🛒 Paying Customers / Demand: 2–3 sentence prose intro + two-layer table with status flags.
   - ⚙️ TRL table assembled from per-presentation TRL fields.
   - Final title + 🎯 Bottom Line + TOC pass.
-  - `[mm:ss]` citation inlining; LaTeX equations if any.
-  - **All tables column-aligned** per the markdown table alignment rule.
-- **Prereq.** Alex writes `golden/M5_concept_checklist.md` after one watch-through of the 2026-03-26 video.
-- **Run.** `python -m src.main LSIC_Downloads/ --event lsic_2026-03-26`
-- **Pass criteria:**
+  - All tables column-aligned per the markdown table alignment rule.
+- **Prereq.** Alex writes `golden/M5_concept_checklist.md`.
+- **Run.** `python -m src.main --synthesize --event lsic_2026-03-26` (no `--slice`, full event)
+- **Pass criteria (revised — 11 gates):**
   1. Output structure matches `golden/2026-03-26_event_mockup.md` section-for-section.
-  2. ≥1 `[mm:ss]` citation in every populated section.
-  3. 🎤 Presentations has exactly 3 sub-sections, named to match the guest decks.
-  4. ❓ Per-Question Role Analysis has one sub-block per 🛠️ question; each sub-block carries 2–3 role bullets.
-  5. 🛒 Paying Customers table populated; status column uses only the four allowed flag values.
-  6. Every Through Expert Lenses block (Bottom Line 5-role + three 3-role mini-blocks) uses roles traceable to `clai/.claude/Behavior/Roles.md`.
-  7. All tables in `notes.md` pass `util.align_table()`'s round-trip check (column widths match header divider).
-  8. Concept-checklist diff: ≥70% hits against `golden/M5_concept_checklist.md`.
+  2. **`validate_notes.py` passes in production mode (`--strict`)** — no placeholders allowed.
+  3. ≥1 `[mm:ss]` citation in every populated section.
+  4. **Every cited `[mm:ss]` resolves to an `evidence_id` in `evidence.json` within ±5s.**
+  5. **No fabricated placeholders (`$X.X`, `~$YY`, `TBD`) in body.**
+  6. 🎤 Presentations has exactly 3 sub-sections, named to match the guest decks.
+  7. ❓ Per-Question Role Analysis has one sub-block per 🛠️ question; each carries 2–3 role bullets.
+  8. 🛒 Paying Customers table populated; status uses only the four allowed flag values.
+  9. Every Through Expert Lenses block uses roles traceable to `clai/.claude/Behavior/Roles.md`.
+  10. All tables in `notes.md` pass `util.align_table()` round-trip check.
+  11. Concept-checklist diff: ≥70% hits against `golden/M5_concept_checklist.md`.
 
 #### M5b — Standalone papers (≤45 min)
 - **Deliverable.** 5-section paper template (TL;DR · Problem · Approach · Findings · LSIC fit). Claude call per paper from extracted PDF text. No timestamps, no speakers.
@@ -290,12 +418,20 @@ process the full event.
   3. Each TL;DR is ≤3 sentences.
 
 #### M6 — Hardening (≤60 min)
-- **Deliverable.** Retry/backoff on `RateLimitError` / `ServiceUnavailable`; per-run cost log printed at end; resume-from-cache verified by `kill -9` mid-stage 3 then rerun. Full-corpus run.
-- **Run.** `python -m src.main LSIC_Downloads/ --all` then Ctrl-C mid-event, rerun.
+- **Deliverable.**
+  - Retry/backoff on `RateLimitError` / `ServiceUnavailable`.
+  - Per-run cost log printed at end (already partial via `src/cost.py`).
+  - Resume-from-cache verified by `kill -9` mid-stage then rerun.
+  - **`--dry-run` flag** — plans the artifact graph + token estimate without API spend.
+  - **`--strict` flag** — fails the run if any `validate_*` returns non-zero.
+  - `run.jsonl` event log (per-stage start/success/duration/io artifacts/API call telemetry).
+- **Run.** `python -m src.main --ingest --synthesize --all` then Ctrl-C mid-event, rerun.
 - **Pass criteria:**
   1. All 8 events + 3 papers complete once.
   2. Cost log printed; ≤ $1.00/hour of video.
-  3. Rerun after kill skips completed events instantly (<1 s each).
+  3. Rerun after kill skips completed events instantly (<1s each).
+  4. `--dry-run` emits cost estimate without making any Gemini/Anthropic call.
+  5. `--strict` blocks output when validators fail.
 
 **Total budget:** ~6 h, fits the 6-h window.
 
@@ -307,12 +443,20 @@ process the full event.
 |---|---|---|
 | Pydantic at every stage seam | schema drift, missing fields | every stage call |
 | `--selftest` mode | broken imports / config | M0, after any refactor |
+| **`validators.py` (Schema gate)** | artifact matches pydantic | every stage write |
+| **`validators.py` (Evidence gate)** | citations/timestamps/assets resolve | M4 + M5 |
+| **`validators.py` (Coverage gate)** | required sections + content types present | M2.5 + M5 |
+| **`validators.py` (Operational gate)** | cache/cost/retry behavior | M2.6 + M6 |
 | Per-stage CLI invocation | stage-local regression | every milestone gate |
+| **Mid-stage kill test** | atomic-write + manifest gate | M2.6 + M6 |
+| **`--dry-run`** | artifact graph + cost estimate w/o API spend | every real run optional |
+| **`--strict`** | production-mode validator (no placeholders) | M5 + M6 |
 | Concept-checklist diff | content quality (binary) | M5, M6 |
-| Cache-skip after kill | idempotency / resumability | M6 only |
 | Cost log per run | runaway spend | every real run |
 
-No `pytest` tonight. Slot reserved at `tests/` for later.
+`--selftest` extended to call `validate_notes` against the golden mockup as
+its third check. No `pytest` yet — slot reserved at `tests/` for when the
+test count exceeds 10.
 
 ---
 
@@ -327,48 +471,59 @@ level a future agent can execute against without re-deriving design choices.
 ```
                         ┌────────────────┐
                         │  contracts.py  │  pydantic models — the seams
+                        │  + Evidence    │  Evidence + ValidationResult added M2.5
+                        │  + Validation* │
                         └────────┬───────┘  no deps on other modules
                                  │
-                  ┌──────────────┼──────────────┐
-                  ▼              ▼              ▼
-         ┌─────────────┐  ┌────────────┐  ┌────────────┐
-         │   util.py   │  │ discover.py│  │ pptx_handler│
-         │ strip_fences│  │  cluster   │  │ pdf_handler │
-         │ mmss_fmt    │  │  classify  │  │  text+png   │
-         │ table_align │  └────────────┘  └─────┬──────┘
-         └──────┬──────┘                        │
-                │                               │
-                ▼                               ▼
-         ┌────────────┐                  ┌────────────┐
-         │ ingest.py  │◄─────────────────│ (consumes  │
-         │ video→wav  │                  │  per-asset │
-         │ + dispatch │                  │  handlers) │
-         └──────┬─────┘                  └────────────┘
+            ┌────────────────────┼──────────────┬──────────────┐
+            ▼                    ▼              ▼              ▼
+       ┌────────────┐  ┌─────────────┐  ┌────────────┐  ┌────────────┐
+       │  util.py   │  │ validators  │  │ discover.py│  │ pptx/pdf   │
+       │ strip,mmss │  │ _notes      │  │  cluster   │  │ _handler   │
+       │ align_tbl  │  │ _transcript │  │  classify  │  │  text+png  │
+       └─────┬──────┘  │ _ingest     │  └────────────┘  └─────┬──────┘
+             │         │ _alignment  │                        │
+             │         │ _visual     │                        │
+             │         └──────┬──────┘                        │
+             │                │                               │
+             ▼                ▼                               ▼
+         ┌────────────┐  enforces gates           ┌────────────┐
+         │ ingest.py  │◄──schema/evidence/cov.    │ (handlers) │
+         │ video→wav  │  + atomic .tmp→rename     │            │
+         │ + manifest │  + manifest status=cmplt  │            │
+         └──────┬─────┘                           └────────────┘
                 │
                 ▼
          ┌────────────┐    ┌─────────────────┐
          │transcribe.py│   │   visual.py     │
-         │Gemini ASR   │   │ scene-detect    │
-         │chunking     │   │ + Gemini VLM    │
-         │diarize+lang │   │ frame keyframes │
+         │Gemini ASR   │   │ HYBRID sampling │
+         │chunking     │   │ scene+60s+text  │
+         │diarize+lang │   │ +audio-cue+VLM  │
          └──────┬──────┘   └────────┬────────┘
                 │                   │
                 └─────────┬─────────┘
                           ▼
                   ┌──────────────┐
-                  │  align.py    │  sectioning + per-deck
-                  │              │  TF-IDF fingerprint match
-                  └──────┬───────┘
+                  │  align.py    │  sectioning + TF-IDF
+                  │              │  + emits evidence.json
+                  └──────┬───────┘  (Evidence Object per claim)
                          ▼
                   ┌──────────────┐
-                  │synthesize.py │  per-presentation calls
-                  │  + paper tpl │  + per-section calls
+                  │synthesize.py │  per-section Claude calls
+                  │  + grounding │  evidence_id-gated citations
                   │  + 5 lenses  │  + table_align on output
                   │  + TRL block │
                   └──────┬───────┘
                          ▼
+                  ┌──────────────┐
+                  │ cost.py      │  per-run token + $ estimator
+                  └──────┬───────┘
+                         ▼
                    ┌───────────┐
-                   │  main.py  │  CLI spine; --selftest, --event, --papers, --all
+                   │  main.py  │  CLI spine; --selftest, --discover,
+                   │           │  --ingest, --transcribe, --visual,
+                   │           │  --align, --synthesize, --validate-*,
+                   │           │  --dry-run, --strict
                    └───────────┘
 ```
 
@@ -376,16 +531,18 @@ level a future agent can execute against without re-deriving design choices.
 
 | Step | Module | Builds on | Why now |
 |------|----------------|----------------------|---------|
-| 1    | `contracts.py` | — | Defines `IngestResult`, `Asset`, `Event`, `Segment`, `Caption`, `Section`, `Presentation`, `TRLRow`. Lock these before any stage code. |
-| 2    | `util.py`      | — | `strip_fences()`, `mmss(seconds)`, `align_table(rows)` — these are tiny and unblock everything downstream. |
-| 3    | `discover.py`  | contracts | Reads `LSIC_Downloads/`, clusters by LSIC ID range + `YYYYMMDD` in filename, classifies via filename heuristics. Outputs `events.json`. No external APIs. |
-| 4    | `pptx_handler.py`, `pdf_handler.py` | contracts | Pure local extraction. `python-pptx` for text + speaker notes; `libreoffice --headless` for slide PNG; `pypdf` + `pdf2image` for PDFs. Cached by file hash. |
-| 5    | `ingest.py`    | contracts, util, handlers | Per-asset dispatch: video → ffmpeg WAV + ffprobe metadata; pptx/pdf → call handlers. Writes `work/events/<id>/manifest.json`. |
-| 6    | `transcribe.py`| ingest        | First cloud call. Gemini 2.5 Flash with 10-min chunking, diarization prompt, language tagging, timestamp clamping. |
-| 7    | `visual.py`    | ingest        | Scene-detect on video, phash dedup, downscale to 1024 px, Gemini VLM. Independent of transcribe — can be built in parallel. |
-| 8    | `align.py`     | transcribe, visual, handlers | Pure Python. Sectioning + TF-IDF fingerprint match of each guest deck against transcript windows. |
-| 9    | `synthesize.py`| align         | Claude per-presentation + per-section calls. Emits column-aligned tables via `util.align_table()`. Generates 5-Role Lens block from `clai/.claude/Behavior/Roles.md`. |
-| 10   | `main.py`      | all above     | CLI entry: `--selftest`, `--event <id>`, `--papers`, `--all`. Thin spine; calls each stage in order with check-then-skip. |
+| 1    | `contracts.py` | — | Pydantic models. **M2.5 adds:** `Evidence`, `ValidationIssue`, `ValidationResult`. |
+| 2    | `util.py`      | — | `strip_fences()`, `mmss(seconds)`, `align_table(rows)`, `slugify()`. |
+| 3    | `validators.py` (M2.5) | contracts | `validate_notes`, `validate_transcript`, `validate_ingest`, `validate_alignment`, `validate_visual`. Returns `ValidationResult` with actionable issues. |
+| 4    | `discover.py`  | contracts | LSIC ID clustering + classification. No external APIs. |
+| 5    | `pptx_handler.py`, `pdf_handler.py` | contracts | Local extraction (python-pptx + libreoffice + PyMuPDF). |
+| 6    | `ingest.py`    | contracts, util, handlers | Per-asset dispatch. **M2.6 retrofits** atomic `.tmp`→rename + manifest. |
+| 7    | `transcribe.py`| ingest        | Gemini ASR with chunking + diarization + language. **M2.6 retrofits** atomic write + manifest. |
+| 8    | `cost.py` (M5/M6) | — | Token + $ estimator per stage. Feeds `--dry-run` and run summary. |
+| 9    | `synthesize.py` (M2.5 thin → M5 full) | transcribe (M2.5); align (M5) | M2.5: single Claude call → notes.md. M5: per-section calls + Evidence-grounded citations + Through 5 Lenses block. |
+| 10   | `visual.py`    | ingest, transcribe (for audio-cue trigger) | **Hybrid sampling**: scene + 60s safety + slide-text-delta + audio-cue. Gemini VLM per kept frame. |
+| 11   | `align.py`     | transcribe, visual, handlers | Sectioning + TF-IDF deck match. **Emits `evidence.json`** alongside `aligned.json`. |
+| 12   | `main.py`      | all above     | CLI flags: `--selftest`, `--discover`, `--ingest`, `--transcribe`, `--synthesize`, `--visual`, `--align`, `--validate-*`, `--dry-run`, `--strict`. |
 
 ### Module-by-module: what each file owns
 
@@ -394,10 +551,13 @@ level a future agent can execute against without re-deriving design choices.
 - `Event` — event_id, date, assets[], video_hash, duration_sec
 - `IngestResult` — workdir, audio_path, video_path, fps, width, height
 - `Segment` — start, end, text, speaker_id, language
-- `Caption` — t, frame_path, visible_text, description, has_equation, has_diagram
+- `Caption` — t, frame_path, visible_text, description, has_equation, has_diagram, **trigger** (scene/safety/text-delta/audio-cue — M3)
 - `Presentation` — asset_id, start, end, slides[], match_score
-- `Section` — start, end, transcript, keyframes[], speakers, languages
+- `Section` — start, end, transcript, keyframes[], speakers, languages, **evidence_ids[]** (M4)
 - `TRLRow` — technology, trl, basis, confidence, source_timestamp
+- **`Evidence` (M2.5/M4)** — evidence_id, kind, source_id, timestamp_start/end, speaker_id, source_asset, text, confidence, tags[]
+- **`ValidationIssue` (M2.5)** — section?, rule, offending?, suggestion?
+- **`ValidationResult` (M2.5)** — passed, issues[]
 - `Briefing` — frontmatter + every section as a pydantic model so the markdown writer is data-driven
 
 **`util.py`**
@@ -495,18 +655,20 @@ System binaries: `ffmpeg`, `ffprobe`, `libreoffice` (for PPTX → PDF conversion
 
 ### Implementation sequence — concrete order to follow
 
-1. **Scaffold the repo.** Create the directory layout from "Repo Layout" above. Empty stubs for every module. Write `requirements.txt` + `.env.example` + `.gitignore`.
-2. **Lock `contracts.py`.** Write every pydantic model with explicit fields. No code outside contracts compiles until these are stable.
-3. **Build `util.py`.** Three tiny functions. Unit-test `align_table()` against the mockup's three tables byte-for-byte — that's its acceptance gate.
-4. **Build `discover.py`.** Run against `LSIC_Downloads/`. Pass: produces the 8 events + 3 papers from the inventory table. No cloud calls.
-5. **Build handlers (`pptx_handler.py`, `pdf_handler.py`).** Run against one event's decks. Pass: each deck has `slide_index.json` + per-slide PNG.
-6. **Build `ingest.py`.** Run against the 2026-03-26 event. Pass: `manifest.json` exists, `audio.wav` is 16 kHz mono.
-7. **Build `transcribe.py`.** This is M2 — the heart of the build. Pass criteria already specified per milestone.
-8. **Build `visual.py`.** Independent of transcribe — can be parallelized.
-9. **Build `align.py`.** Includes the TF-IDF fingerprint matcher for presentation windows.
-10. **Build `synthesize.py`.** Last. Per-presentation Claude calls + per-section Claude calls + 5-Lens prompt + TRL prompt + `align_table()` on every emitted table. Diff result against `golden/2026-03-26_event_mockup.md`.
-11. **Build `main.py`.** Thin CLI; sequencing logic only.
-12. **Hardening (M6).** Retry/backoff wrappers around cloud calls; cost log; verify cache-skip after `kill -9` mid-stage.
+1. ~~Scaffold the repo.~~ ✅ M0
+2. ~~Lock `contracts.py`.~~ ✅ M0 (Evidence + Validation types appended in M2.5)
+3. ~~Build `util.py`.~~ ✅ M0
+4. ~~Build `discover.py`.~~ ✅ M1
+5. ~~Build handlers.~~ ✅ M1
+6. ~~Build `ingest.py`.~~ ✅ M1 (atomic-write retrofit in M2.6)
+7. ~~Build `transcribe.py`.~~ ✅ M2 (atomic-write retrofit in M2.6)
+8. **M2.5 — Build `validators.py` + thin `synthesize.py` (single Claude call) + `--synthesize`/`--validate-notes` flags.** Steel thread on existing 5-min transcript. Acceptance: notes.md exists, 15 sections in canonical order, `validate_notes.py --strict=false` passes.
+9. **M2.6 — Retrofit `ingest.py` + `transcribe.py` with atomic writes + manifests + cache-skip gate.** Acceptance: mid-stage kill→rerun is correct.
+10. **M3 — Build `visual.py` with HYBRID sampling.** Scene + 60s safety + slide-text-delta + audio-cue triggers. Gemini VLM per kept frame. Independent of M4.
+11. **M4 — Build `align.py` + emit `evidence.json`.** Sectioning + TF-IDF deck match + Evidence Object emission.
+12. **M5 — Replace thin `synthesize.py` with full per-section Claude calls + citation grounding.** Evidence-gated `[mm:ss]` citations. `validate_notes.py --strict` enforces production rules.
+13. **M5b — Standalone paper template** (PDFs 2994, 3148, 3160).
+14. **M6 — Hardening.** Retry/backoff + cost log + `--dry-run` + `--strict` + resume-from-cache verified.
 
 ### Cost & rate-limit posture (not yet code, but a design decision)
 
