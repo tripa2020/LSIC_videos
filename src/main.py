@@ -175,6 +175,50 @@ def transcribe_cmd(event_id: str | None, max_sec: float | None) -> int:
     return 0
 
 
+def pipeline_cmd(event_id: str | None, all_flag: bool) -> int:
+    """Chain discover (if needed) + ingest + transcribe + visual + align + synthesize."""
+    from src import discover as discover_mod, ingest as ingest_mod
+    events_path = Path("work/events.json")
+    if not events_path.exists():
+        print("[pipeline] no events.json — running --discover first…", flush=True)
+        discover_mod.discover(Path("LSIC_Downloads"))
+
+    events, _ = ingest_mod.load_events_json()
+    have_video = {e.event_id for e in events
+                  if any(a.kind == "video" for a in e.assets)}
+
+    if all_flag:
+        targets = sorted(have_video)
+    elif event_id:
+        if event_id not in {e.event_id for e in events}:
+            print(f"unknown event_id '{event_id}'", file=sys.stderr)
+            return 1
+        if event_id not in have_video:
+            print(f"{event_id} has no video — pipeline requires ingest/transcribe/visual",
+                  file=sys.stderr)
+            return 1
+        targets = [event_id]
+    else:
+        print("--pipeline requires --event <id> or --all", file=sys.stderr)
+        return 1
+
+    for evt in targets:
+        print(f"\n========== pipeline: {evt} ==========", flush=True)
+        for stage_name, stage_fn in [
+            ("ingest", lambda: ingest_cmd(evt, all_flag=False)),
+            ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
+            ("visual", lambda: visual_cmd(evt)),
+            ("align", lambda: align_cmd(evt)),
+            ("synthesize", lambda: synthesize_cmd(evt, max_sec=None)),
+        ]:
+            rc = stage_fn()
+            if rc:
+                print(f"[pipeline] FAILED at {stage_name} for {evt}", file=sys.stderr)
+                return rc
+        print(f"========== {evt} done ==========", flush=True)
+    return 0
+
+
 def align_cmd(event_id: str | None) -> int:
     """M4: sectioning + per-deck fingerprint match + Evidence Object emission."""
     from src import align as align_mod
@@ -295,6 +339,8 @@ def main() -> int:
                    help="M3: hybrid keyframe extraction + Gemini VLM captioning")
     g.add_argument("--align", action="store_true",
                    help="M4: sectioning + Evidence Object emission")
+    g.add_argument("--pipeline", action="store_true",
+                   help="Chain ingest→transcribe→visual→align→synthesize (use --event or --all)")
     g.add_argument("--synthesize", action="store_true",
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
@@ -326,6 +372,8 @@ def main() -> int:
         return visual_cmd(args.event)
     if args.align:
         return align_cmd(args.event)
+    if args.pipeline:
+        return pipeline_cmd(args.event, args.all)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:

@@ -1,15 +1,17 @@
 """Stage 5: synthesize a strict-template notes.md from the M1-M4 artifacts.
 
 Two entry points:
-- synthesize_thin (M2.5 steel thread): single Claude call from transcript only.
-- synthesize_full (M5):    per-presentation Claude calls + one thematic
+- synthesize_thin (M2.5 steel thread): single LLM call from transcript only.
+- synthesize_full (M5):    per-presentation LLM calls + one thematic
                             assembly call + deterministic markdown render
                             with Evidence-grounded citations.
 
+Backend: Gemini 2.5 Flash (unified with M2 + M3; one API key for the whole
+pipeline). The Anthropic Claude backend lives in git history if needed —
+swap by reverting this module's LLM client.
+
 M5 call budget per event (3-presentation event like 2026-03-26):
-  3x presentation calls (~$0.04 each = $0.12)
-  1x thematic + final call (~$0.40)
-  Total ~$0.52 — under the $1/hr ceiling.
+  3x presentation calls + 1x thematic — well under \$1/hr ceiling.
 """
 
 from __future__ import annotations
@@ -21,8 +23,9 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Optional
 
-from anthropic import Anthropic
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 from src import util
 from src.contracts import (
@@ -31,7 +34,7 @@ from src.contracts import (
 )
 
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+SYNTH_MODEL = "gemini-2.5-flash"
 MAX_OUTPUT_TOKENS = 8000
 TRANSCRIPT_INPUT_CAP_CHARS = 80_000   # safety cap; full M5 chunks per-section
 
@@ -175,11 +178,8 @@ def synthesize_thin(
     output_path: Path,
     event_date: str,
 ) -> Path:
-    """Single-call Claude synthesis. Writes notes.md and returns its path."""
-    load_dotenv()
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set in .env")
+    """Single-call Gemini synthesis. Writes notes.md and returns its path."""
+    client = _gemini_client()
 
     segs_raw = json.loads(transcript_path.read_text())
     segs = [Segment.model_validate(s) for s in segs_raw]
@@ -200,19 +200,20 @@ def synthesize_thin(
         languages=",".join(languages) or "en",
     )
 
-    client = Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
+    resp = client.models.generate_content(
+        model=SYNTH_MODEL,
+        contents=[user_prompt],
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        ),
     )
-    notes_text = msg.content[0].text.strip()
+    notes_text = (resp.text or "").strip()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    # write atomically with a manifest so cache-skip + status checks work
-    from src import util as _util
-    _util.write_with_manifest(output_path, notes_text, stage="synthesize")
+    util.write_with_manifest(output_path, notes_text, stage="synthesize")
     return output_path
 
 
@@ -309,15 +310,11 @@ HARD RULES:
 
 
 def synthesize_full(event_id: str, work_root: Path = Path("work")) -> Path:
-    """Full M5: per-presentation + thematic Claude calls + Evidence-grounded render."""
+    """Full M5: per-presentation + thematic Gemini calls + Evidence-grounded render."""
     from src.contracts import IngestResult
     from src.ingest import load_events_json
 
-    load_dotenv()
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set in .env")
-    client = Anthropic(api_key=api_key)
+    client = _gemini_client()
 
     workdir = work_root / "events" / event_id
 
@@ -422,31 +419,43 @@ def _load_deck_text(workdir: Path, assets: list[Asset]) -> dict[str, str]:
     return out
 
 
-def _call_claude_json(client: Anthropic, system: str, user: str,
-                     max_tokens: int = 6000) -> dict:
-    # Always stream — Anthropic SDK refuses non-streaming calls when est.
-    # duration exceeds 10 min, which happens at max_tokens >= ~16K.
-    with client.messages.stream(
-        model=CLAUDE_MODEL, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": user}],
-    ) as stream:
-        for _ in stream.text_stream:
-            pass  # accumulation handled by the stream
-        final = stream.get_final_message()
-    raw = util.strip_fences(final.content[0].text)
+def _gemini_client() -> genai.Client:
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set in .env")
+    return genai.Client(api_key=api_key)
+
+
+def _call_gemini_json(client: genai.Client, system: str, user: str,
+                      max_tokens: int = 6000) -> dict:
+    resp = client.models.generate_content(
+        model=SYNTH_MODEL,
+        contents=[user],
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            max_output_tokens=max_tokens,
+            response_mime_type="application/json",
+        ),
+    )
+    raw = util.strip_fences(resp.text or "")
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         dump = Path("/tmp/synthesize_failed_response.txt")
         dump.write_text(raw)
-        truncated = final.stop_reason == "max_tokens"
+        finish = getattr(resp.candidates[0], "finish_reason", "?") if resp.candidates else "?"
+        truncated = str(finish) == "MAX_TOKENS"
         raise RuntimeError(
-            f"Claude returned invalid JSON ({'TRUNCATED at max_tokens' if truncated else e}); "
+            f"Gemini returned invalid JSON "
+            f"({'TRUNCATED at max_output_tokens' if truncated else e}); "
             f"full response dumped to {dump}"
         ) from e
 
 
-def _call_presentation(client: Anthropic, p: Presentation,
+def _call_presentation(client: genai.Client, p: Presentation,
                        alignment: AlignmentResult, evidence: list[Evidence],
                        deck_text: str) -> dict:
     # Pull transcript evidence inside this presentation's window
@@ -470,7 +479,7 @@ def _call_presentation(client: Anthropic, p: Presentation,
         f"Produce the JSON object now."
     )
     try:
-        return _call_claude_json(client, PRES_SYSTEM_PROMPT, user, max_tokens=2000)
+        return _call_gemini_json(client, PRES_SYSTEM_PROMPT, user, max_tokens=4000)
     except Exception as e:
         print(f"    [synthesize] presentation {p.asset_id} failed: {e}", flush=True)
         return {
@@ -480,7 +489,7 @@ def _call_presentation(client: Anthropic, p: Presentation,
         }
 
 
-def _call_thematic(client: Anthropic, alignment: AlignmentResult,
+def _call_thematic(client: genai.Client, alignment: AlignmentResult,
                    evidence: list[Evidence], role_pool: list[dict],
                    pres_outputs: list[dict]) -> dict:
     # Build compact context: section-summarized transcript with evidence markers
@@ -517,7 +526,7 @@ def _call_thematic(client: Anthropic, alignment: AlignmentResult,
         f"Produce the thematic JSON object now. Every cited evidence_id must be "
         f"present in the EVENT CONTEXT above."
     )
-    return _call_claude_json(client, sys_prompt, user, max_tokens=32000)
+    return _call_gemini_json(client, sys_prompt, user, max_tokens=32000)
 
 
 def _select_slide_highlights(captions: list[Caption], n: int = 3) -> list[Caption]:
