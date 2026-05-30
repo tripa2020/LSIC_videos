@@ -159,6 +159,22 @@ def ingest_cmd(event_id: str | None, all_flag: bool) -> int:
     return 0
 
 
+def transcribe_cmd(event_id: str | None, max_sec: float | None) -> int:
+    from src import transcribe as transcribe_mod
+    if not event_id:
+        print("--transcribe requires --event <id>", file=sys.stderr)
+        return 1
+    out_path, segs = transcribe_mod.transcribe_one_event(event_id, max_sec=max_sec)
+    speakers = sorted({s.speaker_id for s in segs if s.speaker_id})
+    langs = sorted({s.language for s in segs if s.language})
+    print(f"[transcribe] {event_id} → {out_path}")
+    print(f"             {len(segs)} segments · speakers={speakers} · langs={langs}")
+    if segs:
+        print(f"             first: {util.mmss(segs[0].start)} {segs[0].text[:80]!r}")
+        print(f"             last:  {util.mmss(segs[-1].start)} {segs[-1].text[:80]!r}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="src.main")
     g = parser.add_mutually_exclusive_group(required=True)
@@ -168,11 +184,15 @@ def main() -> int:
                    help="M1: scan LSIC_Downloads/, write work/events.json")
     g.add_argument("--ingest", action="store_true",
                    help="M1: per-asset ingest (use --event or --all)")
+    g.add_argument("--transcribe", action="store_true",
+                   help="M2: ASR via Gemini (use --event, optional --max-sec)")
     parser.add_argument("folder", nargs="?", default="LSIC_Downloads", type=Path,
                         help="source folder for --discover (default: LSIC_Downloads)")
-    parser.add_argument("--event", type=str, help="event_id for --ingest")
+    parser.add_argument("--event", type=str, help="event_id for --ingest/--transcribe")
     parser.add_argument("--all", action="store_true",
                         help="--ingest --all: ingest every event + paper")
+    parser.add_argument("--max-sec", type=float, default=None,
+                        help="--transcribe: limit to first N seconds (test slice)")
     args = parser.parse_args()
 
     if args.selftest:
@@ -181,6 +201,8 @@ def main() -> int:
         return discover_cmd(args.folder)
     if args.ingest:
         return ingest_cmd(args.event, args.all)
+    if args.transcribe:
+        return transcribe_cmd(args.event, args.max_sec)
     parser.print_help()
     return 1
 

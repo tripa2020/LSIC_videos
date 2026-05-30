@@ -59,6 +59,8 @@ on dust-tolerant connectors). Approve the mockup before any code is written.
 | Template addition: 🛒 Paying Customers / Demand | New section after 💰; 2–3 sentence prose intro + two-layer table (`Active funding` / `Active PO` / `Open RFP/RFI` / `Aspirational` status flags) | Anchor: Alex's "customers who are willing to pay for it right now" — surfaces demand-side procurement reality, distinct from supply-side grant funding | 2026-05-29 |
 | PDF rendering library | `PyMuPDF` (fitz) | `pdf2image`+poppler stalled on macOS 13 (Tier 3, source build of ~50 deps including cmake). PyMuPDF is pure-pip, zero system deps, ships text extract + PNG render in one library | 2026-05-29 |
 | Hidden-slide handling in PPTX | Use `min(python-pptx slide count, libreoffice page count)` and log mismatch | `python-pptx` counts hidden slides; libreoffice exports only visible. SPCAslides decks routinely have a hidden tail-slide | 2026-05-29 |
+| ASR backend | Gemini 2.5 Flash via `google-genai`; behind `Transcriber` protocol | Cheapest (~$0.16/hr), single API for M2+M3, decent diarization on 2-3 clean speakers; protocol enables one-file swap to Deepgram/WhisperX later | 2026-05-30 |
+| Tail-clamp segment dropping | Drop segments where `end <= start` after timestamp clamp | Gemini occasionally hallucinates segments past the clip boundary; clamping flattens them to zero-duration which carry no signal | 2026-05-30 |
 
 ---
 
@@ -189,7 +191,7 @@ Branch + Progress file created when work starts on each.
 
 - [x] **M0** — Setup, contracts, .env <!-- progress: M0_SETUP -->
 - [x] **M1** — Discover + Ingest: event grouping + per-asset dispatch (video/pptx/pdf) <!-- progress: M1_DISCOVER_INGEST -->
-- [ ] **M2** — Transcribe: chunking, diarization, language, clamping <!-- progress: M2_TRANSCRIBE -->
+- [x] **M2** — Transcribe: chunking, diarization, language, clamping <!-- progress: M2_TRANSCRIBE -->
 - [ ] **M3** — Visual + Deck render: scene-detect + VLM on frames, PPTX/PDF render to PNG <!-- progress: M3_VISUAL_DECKS -->
 - [ ] **M4** — Align: sectioning + per-deck fingerprint-match for presentation windows <!-- progress: M4_ALIGN -->
 - [ ] **M5** — Synthesize: per-event briefing with per-presentation sub-sections <!-- progress: M5_SYNTHESIZE -->
