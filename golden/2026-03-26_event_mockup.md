@@ -161,6 +161,24 @@ Three industry teams (Amphenol, Yank Tech, plus LSIC's own dust-environment rese
 | JPL (internal) | Capital                   | ~$YY M           | 5 m³ dust chamber           | `[37:45]` |
 | *(gap)*        | Standards development     | unfunded         | Falls between NIST and NASA | `[38:55]` |
 
+*Through Expert Lenses:*
+- 🏭 *Senior DFM Engineer* — SBIR Phase II at ~$X.X M funds prototype runs but not plating-cost qualification at production volumes; the real funding gap is between prototype and 10k-connector scale.
+- ✅ *Test / Reliability / Validation Engineer* — JPL's chamber capital is the only line item that funds test infrastructure; standards-aligned acceptance testing has no funding home.
+- 🔧 *Staff Mechatronics Systems Integrator* — Architecture-coordination role is implied by Artemis but unfunded as an explicit work-package — capture opportunity for a system integrator.
+
+## 🛒 Paying Customers / Demand
+
+NASA Artemis is the anchor demand signal but flows through SBIR awardees, not direct procurement. CLPS landers (Intuitive Machines, Firefly, Astrobotic) are the nearest-term BOM line item where a connector decision becomes a signed purchase order. DOD/Space Force and commercial habitat partners are scoping but not buying today, and the demand curve steepens sharply if Artemis cadence holds through 2028.
+
+| Customer                                  | Procurement mechanism   | Status              | Spend horizon | Source       |
+|-------------------------------------------|-------------------------|---------------------|---------------|--------------|
+| NASA Artemis (anchor)                     | SBIR → integration BOM  | Active funding      | 2027–2030     | `[05:20]`    |
+| CLPS landers (IM, Firefly, Astrobotic)    | Mission-by-mission BOM  | Active PO (implied) | 2026–2028     | inferred     |
+| DOD / Space Force                         | RFI / pre-procurement   | Open RFI            | 2028+         | aspirational |
+| Commercial habitats (Axiom, Sierra Space) | Pre-procurement scoping | Aspirational        | 2030+         | inferred     |
+
+Status flags: `Active funding` · `Active PO` · `Open RFP/RFI` · `Aspirational`.
+
 ## 🚧 Chokepoints
 | Stage          | Chokepoint                                    | Source    |
 |----------------|-----------------------------------------------|-----------|

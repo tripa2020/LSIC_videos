@@ -143,6 +143,33 @@ class SlideHighlight(BaseModel):
     source_timestamp: str
 
 
+class Evidence(BaseModel):
+    """Universal claim primitive. Emitted at M4; consumed at M5 for citation grounding."""
+    evidence_id: str
+    kind: Literal["transcript", "slide", "asset", "metadata"]
+    source_id: str
+    timestamp_start: float
+    timestamp_end: float
+    speaker_id: Optional[str] = None
+    source_asset: Optional[str] = None
+    text: str
+    confidence: float = 0.0
+    tags: list[str] = []
+
+
+class ValidationIssue(BaseModel):
+    """One failed check from a validator. Section/offending/suggestion are optional."""
+    section: Optional[str] = None
+    rule: str
+    offending: Optional[str] = None
+    suggestion: Optional[str] = None
+
+
+class ValidationResult(BaseModel):
+    passed: bool
+    issues: list[ValidationIssue] = []
+
+
 class Briefing(BaseModel):
     """The complete event briefing — data behind the markdown writer."""
 

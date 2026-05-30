@@ -14,7 +14,7 @@ from src import contracts, util
 
 
 SRC_MODULES = [
-    "src.contracts", "src.util", "src.discover", "src.ingest",
+    "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
     "src.pptx_handler", "src.pdf_handler",
 ]
@@ -175,6 +175,43 @@ def transcribe_cmd(event_id: str | None, max_sec: float | None) -> int:
     return 0
 
 
+def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
+    """M2.5 steel thread: single Claude call → notes.md from existing transcript."""
+    from src import synthesize as synth_mod
+    from src.contracts import IngestResult
+    if not event_id:
+        print("--synthesize requires --event <id>", file=sys.stderr)
+        return 1
+    event_workdir = Path("work/events") / event_id
+    manifest = IngestResult.model_validate_json((event_workdir / "manifest.json").read_text())
+
+    if max_sec is not None and max_sec < manifest.duration_sec:
+        target_workdir = event_workdir / f"transcript_slice_{int(max_sec)}s"
+        duration = float(max_sec)
+    else:
+        target_workdir = event_workdir
+        duration = manifest.duration_sec
+    transcript_path = target_workdir / "transcript.json"
+    if not transcript_path.exists():
+        print(f"no transcript at {transcript_path} — run --transcribe first", file=sys.stderr)
+        return 1
+    notes_path = target_workdir / "notes.md"
+    synth_mod.synthesize_thin(
+        event_id=event_id, transcript_path=transcript_path,
+        duration_sec=duration, output_path=notes_path,
+        event_date=str(manifest.event_id.replace("lsic_", "")),
+    )
+    print(f"[synthesize] {event_id} → {notes_path}")
+    return 0
+
+
+def validate_notes_cmd(path: str, strict: bool) -> int:
+    from src.validators import validate_notes, render_result
+    result = validate_notes(Path(path), strict=strict)
+    print(render_result(result))
+    return 0 if result.passed else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="src.main")
     g = parser.add_mutually_exclusive_group(required=True)
@@ -186,13 +223,19 @@ def main() -> int:
                    help="M1: per-asset ingest (use --event or --all)")
     g.add_argument("--transcribe", action="store_true",
                    help="M2: ASR via Gemini (use --event, optional --max-sec)")
+    g.add_argument("--synthesize", action="store_true",
+                   help="M2.5 thin: single Claude call → notes.md from existing transcript")
+    g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
+                   help="run validate_notes on a notes.md file")
     parser.add_argument("folder", nargs="?", default="LSIC_Downloads", type=Path,
                         help="source folder for --discover (default: LSIC_Downloads)")
-    parser.add_argument("--event", type=str, help="event_id for --ingest/--transcribe")
+    parser.add_argument("--event", type=str, help="event_id for --ingest/--transcribe/--synthesize")
     parser.add_argument("--all", action="store_true",
                         help="--ingest --all: ingest every event + paper")
     parser.add_argument("--max-sec", type=float, default=None,
-                        help="--transcribe: limit to first N seconds (test slice)")
+                        help="--transcribe/--synthesize: limit to first N seconds (test slice)")
+    parser.add_argument("--strict", action="store_true",
+                        help="--validate-notes --strict: reject fabricated placeholders")
     args = parser.parse_args()
 
     if args.selftest:
@@ -203,6 +246,10 @@ def main() -> int:
         return ingest_cmd(args.event, args.all)
     if args.transcribe:
         return transcribe_cmd(args.event, args.max_sec)
+    if args.synthesize:
+        return synthesize_cmd(args.event, args.max_sec)
+    if args.validate_notes:
+        return validate_notes_cmd(args.validate_notes, args.strict)
     parser.print_help()
     return 1
 
