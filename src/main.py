@@ -211,7 +211,11 @@ def visual_cmd(event_id: str | None) -> int:
 
 
 def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
-    """M2.5 steel thread: single Claude call → notes.md from existing transcript."""
+    """M5 (full event) or M2.5 thin (slice mode).
+
+    Full event needs M4 alignment + M3 captions; slice mode falls back to
+    single-call thin synthesis from transcript only.
+    """
     from src import synthesize as synth_mod, util as util_mod
     from src.contracts import IngestResult
     if not event_id:
@@ -222,23 +226,28 @@ def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
     manifest = IngestResult.model_validate_json(ingest_manifest.read_text())
 
     if max_sec is not None and max_sec < manifest.duration_sec:
+        # slice mode — thin synth on the slice transcript
         slice_root = event_workdir / f"slice_{int(max_sec)}s"
         transcript_path = slice_root / util_mod.STAGE_TRANSCRIPT / "transcript.json"
         notes_path = slice_root / util_mod.STAGE_BRIEFING / "notes.md"
-        duration = float(max_sec)
-    else:
-        transcript_path = event_workdir / util_mod.STAGE_TRANSCRIPT / "transcript.json"
-        notes_path = event_workdir / util_mod.STAGE_BRIEFING / "notes.md"
-        duration = manifest.duration_sec
-    if not transcript_path.exists():
-        print(f"no transcript at {transcript_path} — run --transcribe first", file=sys.stderr)
+        if not transcript_path.exists():
+            print(f"no transcript at {transcript_path} — run --transcribe first", file=sys.stderr)
+            return 1
+        synth_mod.synthesize_thin(
+            event_id=event_id, transcript_path=transcript_path,
+            duration_sec=float(max_sec), output_path=notes_path,
+            event_date=str(manifest.event_id.replace("lsic_", "")),
+        )
+        print(f"[synthesize/thin] {event_id} (slice) → {notes_path}")
+        return 0
+
+    # full event — M5 path, requires M4 alignment
+    aligned = event_workdir / util_mod.STAGE_ALIGNED / "aligned.json"
+    if not util_mod.is_complete(aligned):
+        print(f"no aligned.json at {aligned} — run --align first (M5 needs M4 output)",
+              file=sys.stderr)
         return 1
-    synth_mod.synthesize_thin(
-        event_id=event_id, transcript_path=transcript_path,
-        duration_sec=duration, output_path=notes_path,
-        event_date=str(manifest.event_id.replace("lsic_", "")),
-    )
-    print(f"[synthesize] {event_id} → {notes_path}")
+    synth_mod.synthesize_full(event_id)
     return 0
 
 
