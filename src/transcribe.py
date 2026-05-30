@@ -92,7 +92,7 @@ class GeminiTranscriber:
         return all_segs
 
     def _chunk_audio(self, audio_path: Path, workdir: Path) -> list[tuple[Path, float]]:
-        chunk_dir = workdir / "audio_chunks"
+        chunk_dir = workdir / "chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
         existing = sorted(chunk_dir.glob("chunk_*.wav"))
         if existing:
@@ -163,19 +163,21 @@ def transcribe(audio_path: Path, duration: float, workdir: Path,
 def transcribe_one_event(event_id: str, max_sec: Optional[float] = None,
                          work_root: Path = WORK_ROOT) -> tuple[Path, list[Segment]]:
     event_workdir = work_root / "events" / event_id
-    manifest_path = event_workdir / "manifest.json"
+    manifest_path = event_workdir / util.STAGE_INGEST / "manifest.json"
     if not manifest_path.exists():
-        raise FileNotFoundError(f"no manifest at {manifest_path} — run --ingest first")
+        raise FileNotFoundError(f"no ingest manifest at {manifest_path} — run --ingest first")
     ing = IngestResult.model_validate_json(manifest_path.read_text())
     if ing.audio_path is None:
         raise RuntimeError(f"{event_id} has no audio (notes-only event)")
 
     audio_path = Path(ing.audio_path)
     duration = ing.duration_sec
-    target_workdir = event_workdir
+    transcript_dir = event_workdir / util.STAGE_TRANSCRIPT
 
     if max_sec is not None and max_sec < duration:
-        slice_path = event_workdir / f"audio_slice_{int(max_sec)}s.wav"
+        slice_root = event_workdir / f"slice_{int(max_sec)}s"
+        slice_root.mkdir(exist_ok=True)
+        slice_path = slice_root / "audio.wav"
         if not slice_path.exists():
             subprocess.run(
                 ["ffmpeg", "-y", "-i", str(audio_path),
@@ -184,8 +186,8 @@ def transcribe_one_event(event_id: str, max_sec: Optional[float] = None,
             )
         audio_path = slice_path
         duration = float(max_sec)
-        target_workdir = event_workdir / f"transcript_slice_{int(max_sec)}s"
-        target_workdir.mkdir(exist_ok=True)
+        transcript_dir = slice_root / util.STAGE_TRANSCRIPT
 
-    segs = transcribe(audio_path, duration, target_workdir)
-    return target_workdir / "transcript.json", segs
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    segs = transcribe(audio_path, duration, transcript_dir)
+    return transcript_dir / "transcript.json", segs

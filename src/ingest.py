@@ -24,8 +24,9 @@ WORK_ROOT = Path("work")
 
 def ingest_event(event: Event, work_root: Path = WORK_ROOT) -> IngestResult:
     workdir = work_root / "events" / event.event_id
-    workdir.mkdir(parents=True, exist_ok=True)
-    manifest = workdir / "manifest.json"
+    ingest_dir = workdir / util.STAGE_INGEST
+    ingest_dir.mkdir(parents=True, exist_ok=True)
+    manifest = ingest_dir / "manifest.json"
     if util.is_complete(manifest):
         return IngestResult.model_validate_json(manifest.read_text())
 
@@ -38,17 +39,17 @@ def ingest_event(event: Event, work_root: Path = WORK_ROOT) -> IngestResult:
 
     for asset in event.assets:
         if asset.kind == "video":
-            audio_path = workdir / "audio.wav"
+            audio_path = ingest_dir / "audio.wav"
             video_path = asset.path
             _ffmpeg_extract_wav(asset.path, audio_path)
             duration, fps, width, height = _ffprobe(asset.path)
         elif asset.kind in ("host_deck", "presentation"):
             handler = pptx_handler if asset.path.suffix.lower() == ".pptx" else pdf_handler
-            handler.extract(asset.path, workdir / "decks" / str(asset.lsic_id))
+            handler.extract(asset.path, ingest_dir / "decks" / str(asset.lsic_id))
         elif asset.kind == "notes":
-            pdf_handler.extract(asset.path, workdir / "notes" / str(asset.lsic_id))
+            pdf_handler.extract(asset.path, ingest_dir / "notes" / str(asset.lsic_id))
         elif asset.kind == "paper":
-            pdf_handler.extract(asset.path, workdir / "papers" / str(asset.lsic_id))
+            pdf_handler.extract(asset.path, ingest_dir / "papers" / str(asset.lsic_id))
 
     result = IngestResult(
         event_id=event.event_id,
@@ -118,6 +119,12 @@ def ingest_one_event(event_id: str, work_root: Path = WORK_ROOT) -> IngestResult
             f"known: {sorted(e.event_id for e in events)}"
         )
     return ingest_event(target, work_root)
+
+
+def load_ingest_result(event_id: str, work_root: Path = WORK_ROOT) -> IngestResult:
+    """Read a previously-written IngestResult from its stage subfolder."""
+    path = work_root / "events" / event_id / util.STAGE_INGEST / "manifest.json"
+    return IngestResult.model_validate_json(path.read_text())
 
 
 def ingest_all(work_root: Path = WORK_ROOT) -> dict:

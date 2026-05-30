@@ -98,9 +98,10 @@ def validate_notes(path: Path, *, strict: bool = False) -> ValidationResult:
 
 def validate_ingest(workdir: Path) -> ValidationResult:
     """M1 ingest workdir checks: manifest complete, audio sane, deck indexes parse."""
-    issues: list[ValidationIssue] = []
     from src import util as _util  # local to avoid circular at module load
-    manifest_path = workdir / "manifest.json"
+    issues: list[ValidationIssue] = []
+    ingest_dir = workdir / _util.STAGE_INGEST
+    manifest_path = ingest_dir / "manifest.json"
     if not _util.is_complete(manifest_path):
         issues.append(ValidationIssue(
             rule="manifest_complete", offending=str(manifest_path),
@@ -114,7 +115,6 @@ def validate_ingest(workdir: Path) -> ValidationResult:
         return ValidationResult(passed=False, issues=[ValidationIssue(
             rule="manifest_schema", suggestion=str(e)[:120])])
 
-    # audio.wav format (if event has video)
     if ing.audio_path is not None:
         audio_path = Path(ing.audio_path)
         if not audio_path.exists():
@@ -125,8 +125,7 @@ def validate_ingest(workdir: Path) -> ValidationResult:
                 rule="duration_positive",
                 offending=f"duration_sec={ing.duration_sec}"))
 
-    # every deck dir must have an index file
-    decks_dir = workdir / "decks"
+    decks_dir = ingest_dir / "decks"
     if decks_dir.is_dir():
         for d in sorted(decks_dir.iterdir()):
             if not d.is_dir():
@@ -143,8 +142,9 @@ def validate_ingest(workdir: Path) -> ValidationResult:
 
 
 def validate_visual(workdir: Path) -> ValidationResult:
-    """M3 stub. Full implementation lands when M3 runs."""
-    cap = workdir / "captions.json"
+    """M3 visual workdir check: captions.json present + parses."""
+    from src import util as _util
+    cap = workdir / _util.STAGE_KEYFRAMES / "captions.json"
     if not cap.exists():
         return ValidationResult(passed=False, issues=[ValidationIssue(
             rule="captions_exist", offending=str(cap),

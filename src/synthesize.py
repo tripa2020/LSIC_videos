@@ -195,7 +195,9 @@ def synthesize_thin(
     notes_text = msg.content[0].text.strip()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(notes_text)
+    # write atomically with a manifest so cache-skip + status checks work
+    from src import util as _util
+    _util.write_with_manifest(output_path, notes_text, stage="synthesize")
     return output_path
 
 

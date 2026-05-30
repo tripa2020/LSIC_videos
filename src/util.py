@@ -1,6 +1,7 @@
 """Utility functions used across stages.
 
-Tiny helpers — table alignment, string cleanup, atomic artifact writes.
+Tiny helpers — table alignment, string cleanup, atomic artifact writes,
+and the per-event workdir layout constants.
 """
 
 from __future__ import annotations
@@ -11,6 +12,15 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+# ---- per-event workdir stage layout (locked 2026-05-30) ----
+# Each event's work/events/<event_id>/ has these stage subfolders:
+STAGE_INGEST = "01_ingest"        # IngestResult manifest, audio.wav, decks/
+STAGE_TRANSCRIPT = "02_transcript"  # transcript.json, chunks/
+STAGE_KEYFRAMES = "03_keyframes"   # captions.json, frames/
+STAGE_ALIGNED = "04_aligned"       # aligned.json, evidence.json (M4)
+STAGE_BRIEFING = "05_briefing"     # notes.md (M5)
 
 
 def strip_fences(s: str) -> str:

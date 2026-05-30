@@ -195,25 +195,27 @@ def visual_cmd(event_id: str | None) -> int:
 
 def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
     """M2.5 steel thread: single Claude call → notes.md from existing transcript."""
-    from src import synthesize as synth_mod
+    from src import synthesize as synth_mod, util as util_mod
     from src.contracts import IngestResult
     if not event_id:
         print("--synthesize requires --event <id>", file=sys.stderr)
         return 1
     event_workdir = Path("work/events") / event_id
-    manifest = IngestResult.model_validate_json((event_workdir / "manifest.json").read_text())
+    ingest_manifest = event_workdir / util_mod.STAGE_INGEST / "manifest.json"
+    manifest = IngestResult.model_validate_json(ingest_manifest.read_text())
 
     if max_sec is not None and max_sec < manifest.duration_sec:
-        target_workdir = event_workdir / f"transcript_slice_{int(max_sec)}s"
+        slice_root = event_workdir / f"slice_{int(max_sec)}s"
+        transcript_path = slice_root / util_mod.STAGE_TRANSCRIPT / "transcript.json"
+        notes_path = slice_root / util_mod.STAGE_BRIEFING / "notes.md"
         duration = float(max_sec)
     else:
-        target_workdir = event_workdir
+        transcript_path = event_workdir / util_mod.STAGE_TRANSCRIPT / "transcript.json"
+        notes_path = event_workdir / util_mod.STAGE_BRIEFING / "notes.md"
         duration = manifest.duration_sec
-    transcript_path = target_workdir / "transcript.json"
     if not transcript_path.exists():
         print(f"no transcript at {transcript_path} — run --transcribe first", file=sys.stderr)
         return 1
-    notes_path = target_workdir / "notes.md"
     synth_mod.synthesize_thin(
         event_id=event_id, transcript_path=transcript_path,
         duration_sec=duration, output_path=notes_path,
@@ -242,10 +244,12 @@ def validate_ingest_cmd(event_id: str | None) -> int:
 
 def validate_transcript_cmd(event_id: str | None) -> int:
     from src.validators import validate_transcript, render_result
+    from src import util as util_mod
     if not event_id:
         print("--validate-transcript requires --event <id>", file=sys.stderr)
         return 1
-    result = validate_transcript(Path("work/events") / event_id / "transcript.json")
+    path = Path("work/events") / event_id / util_mod.STAGE_TRANSCRIPT / "transcript.json"
+    result = validate_transcript(path)
     print(render_result(result))
     return 0 if result.passed else 1
 

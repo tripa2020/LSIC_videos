@@ -91,16 +91,19 @@ class GeminiDescriber:
 def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
                    describer: Optional[Describer] = None) -> list[Caption]:
     workdir = work_root / "events" / event_id
-    captions_path = workdir / "captions.json"
+    keyframes_dir = workdir / util.STAGE_KEYFRAMES
+    keyframes_dir.mkdir(parents=True, exist_ok=True)
+    captions_path = keyframes_dir / "captions.json"
     if util.is_complete(captions_path):
         return [Caption.model_validate(c) for c in json.loads(captions_path.read_text())]
 
-    ing = IngestResult.model_validate_json((workdir / "manifest.json").read_text())
+    ingest_manifest = workdir / util.STAGE_INGEST / "manifest.json"
+    ing = IngestResult.model_validate_json(ingest_manifest.read_text())
     if ing.video_path is None:
         raise RuntimeError(f"{event_id} has no video (notes-only event)")
 
     segments: list[Segment] = []
-    transcript_path = workdir / "transcript.json"
+    transcript_path = workdir / util.STAGE_TRANSCRIPT / "transcript.json"
     if transcript_path.exists():
         segments = [Segment.model_validate(s) for s in json.loads(transcript_path.read_text())]
 
@@ -111,7 +114,7 @@ def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
           f"audio-cue={sum(1 for _, t in candidates if t == 'audio-cue')})",
           flush=True)
 
-    kept = _extract_and_dedup(Path(ing.video_path), candidates, workdir / "keyframes")
+    kept = _extract_and_dedup(Path(ing.video_path), candidates, keyframes_dir / "frames")
     print(f"  [visual] after phash dedup: {len(kept)} unique frames", flush=True)
 
     describer = describer or GeminiDescriber()
