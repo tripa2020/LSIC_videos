@@ -61,6 +61,8 @@ class Caption(BaseModel):
     description: str = ""
     has_equation: bool = False
     has_diagram: bool = False
+    trigger: Optional[Literal["scene", "safety", "text-delta", "audio-cue"]] = None
+    caption_status: str = "ok"   # "ok" | "failed: <ExceptionType>"
 
 
 class Slide(BaseModel):

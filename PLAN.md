@@ -271,7 +271,7 @@ Branch + Progress file created when work starts on each.
 - [x] **M2** — Transcribe: chunking, diarization, language, clamping <!-- progress: M2_TRANSCRIBE -->
 - [x] **M2.5** — Steel thread: `validators.py` + thin `synthesize.py` → first end-to-end notes.md <!-- progress: M2.5_STEEL_THREAD -->
 - [x] **M2.6** — Retrofit M1+M2: atomic writes + manifest gate + validate_ingest/_transcript <!-- progress: M2.6_RETROFIT -->
-- [ ] **M3** — Visual + Deck render: **hybrid sampling** (scene + 60s safety + slide-text delta + audio cue) + VLM <!-- progress: M3_VISUAL_DECKS -->
+- [x] **M3** — Visual + Deck render: **hybrid sampling** (scene + 60s safety + audio cue) + VLM <!-- progress: M3_VISUAL_DECKS -->
 - [ ] **M4** — Align + **Evidence Object** emission (`aligned.json` + `evidence.json`) <!-- progress: M4_ALIGN -->
 - [ ] **M5** — Synthesize: per-event briefing with **citation grounding** (every `[mm:ss]` resolves to evidence_id) <!-- progress: M5_SYNTHESIZE -->
 - [ ] **M5b** — Papers: standalone-paper template for reference PDFs (2994, 3148, 3160) <!-- progress: M5B_PAPERS -->

@@ -175,6 +175,24 @@ def transcribe_cmd(event_id: str | None, max_sec: float | None) -> int:
     return 0
 
 
+def visual_cmd(event_id: str | None) -> int:
+    """M3: hybrid-sampled keyframe extraction + Gemini VLM captioning."""
+    from src import visual as visual_mod
+    if not event_id:
+        print("--visual requires --event <id>", file=sys.stderr)
+        return 1
+    caps = visual_mod.extract_visual(event_id)
+    workdir = Path("work/events") / event_id
+    by_trigger = {}
+    for c in caps:
+        by_trigger[c.trigger or "?"] = by_trigger.get(c.trigger or "?", 0) + 1
+    print(f"[visual] {event_id} → {workdir / 'captions.json'}")
+    print(f"         {len(caps)} captioned frames · triggers={dict(by_trigger)}")
+    flagged = sum(1 for c in caps if c.has_equation or c.has_diagram)
+    print(f"         {flagged} frames flagged has_equation or has_diagram")
+    return 0
+
+
 def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
     """M2.5 steel thread: single Claude call → notes.md from existing transcript."""
     from src import synthesize as synth_mod
@@ -243,6 +261,8 @@ def main() -> int:
                    help="M1: per-asset ingest (use --event or --all)")
     g.add_argument("--transcribe", action="store_true",
                    help="M2: ASR via Gemini (use --event, optional --max-sec)")
+    g.add_argument("--visual", action="store_true",
+                   help="M3: hybrid keyframe extraction + Gemini VLM captioning")
     g.add_argument("--synthesize", action="store_true",
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
@@ -270,6 +290,8 @@ def main() -> int:
         return ingest_cmd(args.event, args.all)
     if args.transcribe:
         return transcribe_cmd(args.event, args.max_sec)
+    if args.visual:
+        return visual_cmd(args.event)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:
