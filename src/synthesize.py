@@ -34,7 +34,7 @@ from src.contracts import (
 )
 
 
-SYNTH_MODEL = "gemini-2.5-flash"
+SYNTH_MODEL = "gemini-2.5-pro"   # was flash — Pro for richer, denser briefings (~4x cost, ~3x slower)
 MAX_OUTPUT_TOKENS = 8000
 TRANSCRIPT_INPUT_CAP_CHARS = 80_000   # safety cap; full M5 chunks per-section
 
