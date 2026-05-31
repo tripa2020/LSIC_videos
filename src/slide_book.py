@@ -158,7 +158,13 @@ def slide_book(event_id: str, work_root: Path = WORK_ROOT) -> tuple[Path, Path, 
 
 
 def _load_all_deck_slides(decks_dir: Path) -> list[tuple[str, int, Path]]:
-    """Walk decks/ and return [(asset_id, slide_n, png_path), ...]."""
+    """Walk decks/ and return [(asset_id, slide_n, png_path), ...].
+
+    Derives the PNG path from the deck directory + slide number, ignoring any
+    `png_path` field in slide_index.json (which can go stale if the workdir
+    was moved or refactored). Tries both `slide_NNN.png` (PPTX) and
+    `page_NNN.png` (PDF) naming conventions.
+    """
     out: list[tuple[str, int, Path]] = []
     if not decks_dir.is_dir():
         return out
@@ -172,10 +178,18 @@ def _load_all_deck_slides(decks_dir: Path) -> list[tuple[str, int, Path]]:
             continue
         data = json.loads(idx_path.read_text())
         for s in data.get("slides", []):
-            png = s.get("png_path")
-            if not png:
+            n = int(s.get("n", 0))
+            png: Optional[Path] = None
+            for prefix in ("slide", "page"):
+                candidate = d / f"{prefix}_{n:03d}.png"
+                if candidate.exists():
+                    png = candidate
+                    break
+            if png is None:
+                print(f"  [slide_book] missing PNG for {d.name}#{n}; skipping",
+                      flush=True)
                 continue
-            out.append((d.name, int(s.get("n", 0)), Path(png)))
+            out.append((d.name, n, png))
     return out
 
 
