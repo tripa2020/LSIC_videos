@@ -314,13 +314,14 @@ def validate_ingest_cmd(event_id: str | None) -> int:
 
 
 def slide_book_cmd(event_id: str | None) -> int:
-    """M5.5: per-slide VLM curation + topical slides.md + equations.md."""
+    """M5.5: per-slide VLM curation + topical slides.pdf + slide_captions.md + equations.md."""
     from src import slide_book as sb_mod
     if not event_id:
         print("--slide-book requires --event <id>", file=sys.stderr)
         return 1
-    slides_path, eq_path = sb_mod.slide_book(event_id)
-    print(f"[slide_book] {event_id} → {slides_path}")
+    pdf_path, captions_path, eq_path = sb_mod.slide_book(event_id)
+    print(f"[slide_book] {event_id} → {pdf_path}")
+    print(f"             {event_id} → {captions_path}")
     print(f"             {event_id} → {eq_path}")
     return 0
 

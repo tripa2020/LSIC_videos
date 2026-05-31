@@ -153,34 +153,23 @@ def validate_visual(workdir: Path) -> ValidationResult:
 
 
 def validate_slides(workdir: Path) -> ValidationResult:
-    """M5.5 check: slides.md + equations.md exist, manifest complete, image refs resolve."""
+    """M5.5 check: slides.pdf + slide_captions.md + equations.md all complete."""
     from src import util as _util
     issues: list[ValidationIssue] = []
     briefing_dir = workdir / _util.STAGE_BRIEFING
-    slides_path = briefing_dir / "slides.md"
-    eq_path = briefing_dir / "equations.md"
-    if not _util.is_complete(slides_path):
-        issues.append(ValidationIssue(
-            rule="slides_md_complete", offending=str(slides_path),
-            suggestion="run --slide-book --event <id>"))
-    if not _util.is_complete(eq_path):
-        issues.append(ValidationIssue(
-            rule="equations_md_complete", offending=str(eq_path)))
+    for name in ("slides.pdf", "slide_captions.md", "equations.md"):
+        p = briefing_dir / name
+        if not _util.is_complete(p):
+            issues.append(ValidationIssue(
+                rule=f"{name}_complete", offending=str(p),
+                suggestion="run --slide-book --event <id>"))
     if issues:
         return ValidationResult(passed=False, issues=issues)
-
-    # check every embedded image reference resolves on disk
-    text = slides_path.read_text()
-    for m in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", text):
-        rel = m.group(1)
-        target = (briefing_dir / rel).resolve()
-        if not target.exists():
-            issues.append(ValidationIssue(
-                section="slides.md", rule="image_ref_resolves",
-                offending=rel,
-                suggestion=f"resolved to {target} which is missing"))
-            if len(issues) >= 5:  # cap noisy output
-                break
+    pdf_path = briefing_dir / "slides.pdf"
+    if pdf_path.stat().st_size < 1000:   # under 1 KB = empty/broken
+        issues.append(ValidationIssue(
+            rule="slides_pdf_nonempty", offending=str(pdf_path),
+            suggestion=f"PDF is only {pdf_path.stat().st_size} bytes"))
     return ValidationResult(passed=not issues, issues=issues)
 
 

@@ -165,6 +165,8 @@ class CuratedSlide(BaseModel):
     contains_equation: bool = False
     kind: Literal["graph", "diagram", "model", "image", "table",
                   "equation", "text-only"] = "text-only"
+    # normalized (0-1) bounding box of informative region for PDF cropping
+    bbox: Optional[dict[str, float]] = None
 
 
 class Evidence(BaseModel):
