@@ -35,6 +35,8 @@ from src.contracts import (
 
 
 SYNTH_MODEL = "gemini-2.5-pro"   # was flash — Pro for richer, denser briefings (~4x cost, ~3x slower)
+# Pro REQUIRES thinking mode (rejects budget=0 with INVALID_ARGUMENT); Flash supports both.
+THINKING_BUDGET = 0 if "flash" in SYNTH_MODEL else 4096
 MAX_OUTPUT_TOKENS = 8000
 TRANSCRIPT_INPUT_CAP_CHARS = 80_000   # safety cap; full M5 chunks per-section
 
@@ -206,7 +208,7 @@ def synthesize_thin(
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
             max_output_tokens=MAX_OUTPUT_TOKENS,
         ),
     )
@@ -435,7 +437,7 @@ def _call_gemini_json(client: genai.Client, system: str, user: str,
         config=types.GenerateContentConfig(
             system_instruction=system,
             temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
             max_output_tokens=max_tokens,
             response_mime_type="application/json",
         ),
