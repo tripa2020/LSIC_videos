@@ -16,7 +16,7 @@ from src import contracts, util
 SRC_MODULES = [
     "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
-    "src.pptx_handler", "src.pdf_handler",
+    "src.slide_book", "src.pptx_handler", "src.pdf_handler",
 ]
 
 
@@ -210,6 +210,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool) -> int:
             ("visual", lambda: visual_cmd(evt)),
             ("align", lambda: align_cmd(evt)),
             ("synthesize", lambda: synthesize_cmd(evt, max_sec=None)),
+            ("slide_book", lambda: slide_book_cmd(evt)),
         ]:
             rc = stage_fn()
             if rc:
@@ -312,6 +313,30 @@ def validate_ingest_cmd(event_id: str | None) -> int:
     return 0 if result.passed else 1
 
 
+def slide_book_cmd(event_id: str | None) -> int:
+    """M5.5: per-slide VLM curation + topical slides.md + equations.md."""
+    from src import slide_book as sb_mod
+    if not event_id:
+        print("--slide-book requires --event <id>", file=sys.stderr)
+        return 1
+    slides_path, eq_path = sb_mod.slide_book(event_id)
+    print(f"[slide_book] {event_id} → {slides_path}")
+    print(f"             {event_id} → {eq_path}")
+    return 0
+
+
+def validate_slides_cmd(event_id: str | None) -> int:
+    from src.validators import validate_slides, render_result
+    from src import util as util_mod
+    if not event_id:
+        print("--validate-slides requires --event <id>", file=sys.stderr)
+        return 1
+    workdir = Path("work/events") / event_id
+    result = validate_slides(workdir)
+    print(render_result(result))
+    return 0 if result.passed else 1
+
+
 def validate_transcript_cmd(event_id: str | None) -> int:
     from src.validators import validate_transcript, render_result
     from src import util as util_mod
@@ -339,8 +364,12 @@ def main() -> int:
                    help="M3: hybrid keyframe extraction + Gemini VLM captioning")
     g.add_argument("--align", action="store_true",
                    help="M4: sectioning + Evidence Object emission")
+    g.add_argument("--slide-book", action="store_true",
+                   help="M5.5: per-slide VLM curation → slides.md + equations.md")
+    g.add_argument("--validate-slides", action="store_true",
+                   help="validate the slide_book output for an event (use --event)")
     g.add_argument("--pipeline", action="store_true",
-                   help="Chain ingest→transcribe→visual→align→synthesize (use --event or --all)")
+                   help="Chain ingest→transcribe→visual→align→synthesize→slide_book (use --event or --all)")
     g.add_argument("--synthesize", action="store_true",
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
@@ -372,6 +401,10 @@ def main() -> int:
         return visual_cmd(args.event)
     if args.align:
         return align_cmd(args.event)
+    if args.slide_book:
+        return slide_book_cmd(args.event)
+    if args.validate_slides:
+        return validate_slides_cmd(args.event)
     if args.pipeline:
         return pipeline_cmd(args.event, args.all)
     if args.synthesize:

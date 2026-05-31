@@ -61,6 +61,7 @@ on dust-tolerant connectors). Approve the mockup before any code is written.
 | Hidden-slide handling in PPTX | Use `min(python-pptx slide count, libreoffice page count)` and log mismatch | `python-pptx` counts hidden slides; libreoffice exports only visible. SPCAslides decks routinely have a hidden tail-slide | 2026-05-29 |
 | ASR backend | Gemini 2.5 Flash via `google-genai`; behind `Transcriber` protocol | Cheapest (~$0.16/hr), single API for M2+M3, decent diarization on 2-3 clean speakers; protocol enables one-file swap to Deepgram/WhisperX later | 2026-05-30 |
 | Tail-clamp segment dropping | Drop segments where `end <= start` after timestamp clamp | Gemini occasionally hallucinates segments past the clip boundary; clamping flattens them to zero-duration which carry no signal | 2026-05-30 |
+| M5.5 slide_book artifact | Topical `slides.md` (+ `equations.md`) in `05_briefing/`; per-slide Gemini VLM curates is_informative/topic/commentary/contains_equation; keyword-overlap cluster on topic phrases; filter drops title/agenda/contact/bio/text-only | Alex's 2026-01-29 note: notes.md's 📎 highlights are sparse/disorganized; wants a single continuous image-heavy doc filtered to equations/graphs/diagrams/models/images. Per-slide cache keeps reruns instant. ~$0.05/event for ~40-60 slides. | 2026-05-31 |
 | Information Architecture Contract | Mockup at `golden/2026-03-26_event_mockup.md` is the canonical product shape; `validators.py` enforces structure deterministically | Pipeline is correct only when output satisfies the contract — running end-to-end is not the same as producing a verifiable briefing | 2026-05-30 |
 | Validation philosophy | Every stage has four gates: **Schema** (pydantic) · **Evidence** (claims resolve to sources) · **Coverage** (required sections present) · **Operational** (cache, cost, retry) | Manual review reserved for subjective quality only; structural correctness must be code-enforced | 2026-05-30 |
 | Evidence Object | Universal claim primitive emitted at M4; every claim in M5's notes.md routes through an `evidence_id` with kind, source_id, timestamps, speaker, asset, text, confidence, tags | Prevents fabricated-but-plausible briefing content; makes citations machine-verifiable | 2026-05-30 |
@@ -274,6 +275,7 @@ Branch + Progress file created when work starts on each.
 - [x] **M3** — Visual + Deck render: **hybrid sampling** (scene + 60s safety + audio cue) + VLM <!-- progress: M3_VISUAL_DECKS -->
 - [x] **M4** — Align + **Evidence Object** emission (`aligned.json` + `evidence.json`) <!-- progress: M4_ALIGN -->
 - [x] **M5** — Synthesize: per-event briefing with **citation grounding** (every `[mm:ss]` resolves to evidence_id) <!-- progress: M5_SYNTHESIZE -->
+- [x] **M5.5** — Slide Book: per-slide VLM curation → topical `slides.md` + `equations.md` <!-- progress: M5.5_SLIDE_BOOK -->
 - [ ] **M5b** — Papers: standalone-paper template for reference PDFs (2994, 3148, 3160) <!-- progress: M5B_PAPERS -->
 - [ ] **M6** — Hardening: retry/backoff, cost log, resume-from-cache verified, `--dry-run`/`--strict` flags <!-- progress: M6_HARDENING -->
 
@@ -682,3 +684,4 @@ System binaries: `ffmpeg`, `ffprobe`, `libreoffice` (for PPTX → PDF conversion
 ## Known Failures
 
 (empty — populate after first debug session per clai convention)
+

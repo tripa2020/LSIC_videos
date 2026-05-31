@@ -154,6 +154,19 @@ class SlideHighlight(BaseModel):
     source_timestamp: str
 
 
+class CuratedSlide(BaseModel):
+    """One slide from a deck, VLM-curated for the M5.5 slide_book."""
+    asset_id: str
+    slide_n: int
+    png_path: Path
+    is_informative: bool
+    topic: str = ""
+    commentary: str = ""
+    contains_equation: bool = False
+    kind: Literal["graph", "diagram", "model", "image", "table",
+                  "equation", "text-only"] = "text-only"
+
+
 class Evidence(BaseModel):
     """Universal claim primitive. Emitted at M4; consumed at M5 for citation grounding."""
     evidence_id: str
