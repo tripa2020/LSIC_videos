@@ -8,7 +8,9 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+import time
 from pathlib import Path
+from typing import Callable, Optional
 
 from src import contracts, util
 
@@ -16,7 +18,7 @@ from src import contracts, util
 SRC_MODULES = [
     "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
-    "src.slide_book", "src.pptx_handler", "src.pdf_handler",
+    "src.slide_book", "src.report", "src.status", "src.pptx_handler", "src.pdf_handler",
 ]
 
 
@@ -38,8 +40,28 @@ def selftest() -> int:
     n = _check_table_alignment()
     print(f"OK ({n}/3 tables match)")
 
+    print("[selftest] status matrix on a fake work dir…", end=" ", flush=True)
+    _check_status()
+    print("OK")
+
     print("[selftest] OK")
     return 0
+
+
+def _check_status() -> None:
+    """Fakes-only (no network): manifest gates → correct first-incomplete stage."""
+    import tempfile
+    from src import status as status_mod
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "events" / "lsic_test"
+        ing = root / util.STAGE_INGEST / "manifest.json"
+        ing.parent.mkdir(parents=True)
+        util.write_with_manifest(ing, "{}", stage="ingest")   # only ingest complete
+        nxt = status_mod.first_incomplete(root)
+        assert nxt == "transcribe", f"expected transcribe, got {nxt}"
+        empty = Path(td) / "events" / "lsic_empty"
+        empty.mkdir(parents=True)
+        assert status_mod.first_incomplete(empty) == "ingest"
 
 
 def _check_pydantic_roundtrip() -> int:
@@ -175,8 +197,36 @@ def transcribe_cmd(event_id: str | None, max_sec: float | None) -> int:
     return 0
 
 
-def pipeline_cmd(event_id: str | None, all_flag: bool) -> int:
-    """Chain discover (if needed) + ingest + transcribe + visual + align + synthesize."""
+def run_event_stages(evt: str,
+                     stages: list[tuple[str, Callable[[], int]]]) -> tuple[bool, Optional[str]]:
+    """Run an event's (name, fn) stages in order, **exception-safe**.
+
+    A raised exception is caught and treated as rc=1 (never propagates) so the caller's
+    --keep-going loop can continue to the next event. Returns (ok, failed_stage).
+    Pure control-flow over injected callables → unit-tested with fake stage fns.
+    """
+    for i, (name, fn) in enumerate(stages, 1):
+        t0 = time.monotonic()
+        print(f"  ({i}/{len(stages)}) {name} …", flush=True)
+        try:
+            rc = fn()
+        except Exception as e:
+            print(f"  ({i}/{len(stages)}) {name} EXCEPTION: {str(e)[:140]}",
+                  file=sys.stderr, flush=True)
+            rc = 1
+        dt = time.monotonic() - t0
+        print(f"  ({i}/{len(stages)}) {name} {'OK' if not rc else 'FAILED'} {dt:.0f}s", flush=True)
+        if rc:
+            return False, name
+    return True, None
+
+
+def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False) -> int:
+    """Chain ingest→transcribe→visual→align→synthesize→slide_book→report per event.
+
+    keep_going=False (default) aborts the batch on the first failing stage (today's
+    behavior). keep_going=True continues to the next event and prints a final matrix.
+    """
     from src import discover as discover_mod, ingest as ingest_mod
     events_path = Path("work/events.json")
     if not events_path.exists():
@@ -202,21 +252,34 @@ def pipeline_cmd(event_id: str | None, all_flag: bool) -> int:
         print("--pipeline requires --event <id> or --all", file=sys.stderr)
         return 1
 
-    for evt in targets:
-        print(f"\n========== pipeline: {evt} ==========", flush=True)
-        for stage_name, stage_fn in [
+    failures: list[tuple[str, str]] = []   # (event_id, stage) for --keep-going summary
+    for k, evt in enumerate(targets, 1):
+        print(f"\n========== event {k}/{len(targets)}: {evt} ==========", flush=True)
+        stages = [
             ("ingest", lambda: ingest_cmd(evt, all_flag=False)),
             ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
             ("visual", lambda: visual_cmd(evt)),
             ("align", lambda: align_cmd(evt)),
             ("synthesize", lambda: synthesize_cmd(evt, max_sec=None)),
             ("slide_book", lambda: slide_book_cmd(evt)),
-        ]:
-            rc = stage_fn()
-            if rc:
-                print(f"[pipeline] FAILED at {stage_name} for {evt}", file=sys.stderr)
-                return rc
-        print(f"========== {evt} done ==========", flush=True)
+            ("report", lambda: report_cmd(evt)),
+        ]
+        ok, failed = run_event_stages(evt, stages)
+        if not ok:
+            failures.append((evt, failed))
+            print(f"[pipeline] FAILED at {failed} for {evt}", file=sys.stderr)
+            if not keep_going:
+                return 1                            # degrade-to-today: abort the batch
+        else:
+            print(f"========== {evt} done ==========", flush=True)
+
+    if keep_going:
+        from src import status as status_mod
+        print("\n========== run complete ==========", flush=True)
+        status_mod.print_status()
+        if failures:
+            print("failed:", ", ".join(f"{e}@{s}" for e, s in failures), file=sys.stderr)
+        return 1 if failures else 0
     return 0
 
 
@@ -326,6 +389,24 @@ def slide_book_cmd(event_id: str | None) -> int:
     return 0
 
 
+def report_cmd(event_id: str | None) -> int:
+    """Assemble the reader-facing Report/ folder (notes.md, slides.pdf, slide_captions.md)."""
+    from src import report as report_mod
+    if not event_id:
+        print("--report requires --event <id>", file=sys.stderr)
+        return 1
+    dst = report_mod.assemble_report(event_id)
+    print(f"[report] {event_id} → {dst}")
+    return 0
+
+
+def status_cmd(event_id: str | None) -> int:
+    """Print the per-event stage-completion matrix (all events, or one with --event)."""
+    from src import status as status_mod
+    status_mod.print_status(event_id=event_id)
+    return 0
+
+
 def validate_slides_cmd(event_id: str | None) -> int:
     from src.validators import validate_slides, render_result
     from src import util as util_mod
@@ -367,6 +448,10 @@ def main() -> int:
                    help="M4: sectioning + Evidence Object emission")
     g.add_argument("--slide-book", action="store_true",
                    help="M5.5: per-slide VLM curation → slides.md + equations.md")
+    g.add_argument("--report", action="store_true",
+                   help="assemble reader-facing Report/ folder (notes.md, slides.pdf, slide_captions.md)")
+    g.add_argument("--status", action="store_true",
+                   help="print the per-event stage-completion matrix (optionally with --event)")
     g.add_argument("--validate-slides", action="store_true",
                    help="validate the slide_book output for an event (use --event)")
     g.add_argument("--pipeline", action="store_true",
@@ -388,6 +473,8 @@ def main() -> int:
                         help="--transcribe/--synthesize: limit to first N seconds (test slice)")
     parser.add_argument("--strict", action="store_true",
                         help="--validate-notes --strict: reject fabricated placeholders")
+    parser.add_argument("--keep-going", action="store_true",
+                        help="--pipeline --all: continue past a failed event instead of aborting")
     args = parser.parse_args()
 
     if args.selftest:
@@ -404,10 +491,14 @@ def main() -> int:
         return align_cmd(args.event)
     if args.slide_book:
         return slide_book_cmd(args.event)
+    if args.report:
+        return report_cmd(args.event)
+    if args.status:
+        return status_cmd(args.event)
     if args.validate_slides:
         return validate_slides_cmd(args.event)
     if args.pipeline:
-        return pipeline_cmd(args.event, args.all)
+        return pipeline_cmd(args.event, args.all, args.keep_going)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:

@@ -5,6 +5,12 @@ implement the Transcriber protocol (e.g. WhisperXTranscriber) and pass it in.
 
 Output: list[Segment] cached at <workdir>/transcript.json. Timestamps are
 absolute (chunk offsets added back), sorted, clamped to duration.
+
+Crash-proofing (the core logic is pure + injectable → unit-tested with fakes):
+- `_transcribe_segment(call_fn, split_fn)` — on output-token overflow (finish_reason
+  MAX_TOKENS) the audio is split in half and re-transcribed, guaranteeing completion.
+- `_parse_segments` / `_reassemble` — structured-response parsing + parallel merge.
+The API call (`GeminiTranscriber._call_api`) is the only un-tested boundary.
 """
 
 from __future__ import annotations
@@ -13,26 +19,31 @@ import json
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 from src import util
 from src.contracts import IngestResult, Segment  # noqa: F401 (Segment used above)
 
 
 WORK_ROOT = Path("work")
-DEFAULT_CHUNK_SEC = 600        # 10-min chunks keep each JSON response under output limits
+DEFAULT_CHUNK_SEC = 300        # 5-min chunks: lighter calls survive flaky networks
 GEMINI_MODEL = "gemini-2.5-flash"
 FILE_ACTIVE_TIMEOUT_SEC = 60
+ASR_CONCURRENCY = int(os.getenv("ASR_CONCURRENCY", "12"))  # chunks transcribed in parallel
+MAX_OUTPUT_TOKENS = 32_768     # raise from the 8,192 default so dense chunks don't truncate
+MAX_SPLIT_DEPTH = 3            # backstop: halve a chunk that still overflows, up to 3 levels
 
 ASR_PROMPT = """\
 Transcribe the attached audio.
 
-Return ONLY a JSON array (no prose, no markdown fences). Each element:
+Return ONLY a JSON array. Each element:
 {
   "start": <seconds float, from start of THIS clip>,
   "end":   <seconds float>,
@@ -46,50 +57,210 @@ speaker letter for the same voice every time. Do not invent content during
 silence."""
 
 
+class _AsrRow(BaseModel):
+    """Response schema for one ASR segment — forces Gemini to emit valid, typed JSON."""
+    start: float
+    end: float
+    text: str
+    speaker_id: Optional[str] = None
+    language: Optional[str] = None
+
+
+# ---- pure, injectable logic (unit-tested with fakes, no network) -------------
+
+def _transient(e: Exception) -> bool:
+    """Retryable Gemini/network errors: overload, deadline, or dropped connection."""
+    msg = str(e)
+    return any(k in msg for k in (
+        "503", "429", "500", "502", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
+        "overloaded", "high demand", "DEADLINE", "RemoteProtocolError",
+        "Server disconnected", "ConnectError", "ConnectionError",
+        "RemoteDisconnected", "timed out", "Timeout", "EOF occurred",
+    ))
+
+
+def _parse_segments(parsed: Optional[list], offset: float) -> list[Segment]:
+    """Structured ASR rows → Segments with the chunk offset applied. Skips malformed rows."""
+    segs: list[Segment] = []
+    for s in parsed or []:
+        try:
+            segs.append(Segment(
+                start=float(s["start"]) + offset,
+                end=float(s["end"]) + offset,
+                text=str(s.get("text", "")).strip(),
+                speaker_id=s.get("speaker_id"),
+                language=s.get("language"),
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue  # one bad row never sinks the chunk
+    return segs
+
+
+def _reassemble(by_idx: dict[int, list[Segment]], duration: float) -> list[Segment]:
+    """Merge per-chunk results (any completion order) → clamped, zero-dropped, sorted."""
+    all_segs = [s for i in sorted(by_idx) for s in by_idx[i]]
+    for s in all_segs:
+        s.start = max(0.0, min(s.start, duration))
+        s.end = max(s.start, min(s.end, duration))
+    all_segs = [s for s in all_segs if s.end > s.start]
+    all_segs.sort(key=lambda s: s.start)
+    return all_segs
+
+
+# call_fn(audio) -> (parsed_rows | None, finish_reason); split_fn(audio, offset) -> [(audio, off), ...]
+CallFn = Callable[[object], "tuple[Optional[list], str]"]
+SplitFn = Callable[[object, float], "list[tuple[object, float]]"]
+
+
+def _transcribe_segment(audio: object, offset: float, call_fn: CallFn, split_fn: SplitFn,
+                        depth: int = 0) -> list[Segment]:
+    """Transcribe one audio segment; on output-token overflow split in half and recurse.
+
+    Pure given call_fn/split_fn → unit-testable with fakes. The recursion guarantees a
+    too-dense chunk completes instead of crashing on a truncated response.
+    """
+    parsed, finish = call_fn(audio)
+    if parsed is not None and "MAX_TOKENS" not in str(finish):
+        return _parse_segments(parsed, offset)
+    if depth >= MAX_SPLIT_DEPTH:
+        raise RuntimeError(f"ASR output overflow past split depth {MAX_SPLIT_DEPTH}")
+    out: list[Segment] = []
+    for sub_audio, sub_off in split_fn(audio, offset):
+        out += _transcribe_segment(sub_audio, sub_off, call_fn, split_fn, depth + 1)
+    return out
+
+
+def _finish_reason(resp) -> str:
+    try:
+        return str(resp.candidates[0].finish_reason)
+    except (AttributeError, IndexError, TypeError):
+        return ""
+
+
+def _probe_duration(path: Path) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(path)],
+        check=True, capture_output=True, text=True,
+    )
+    return float(out.stdout.strip())
+
+
 class Transcriber(Protocol):
     def transcribe(self, audio_path: Path, duration: float, workdir: Path) -> list[Segment]: ...
 
 
 class GeminiTranscriber:
-    def __init__(self, model: str = GEMINI_MODEL, chunk_sec: int = DEFAULT_CHUNK_SEC):
+    def __init__(self, model: str = GEMINI_MODEL, chunk_sec: int = DEFAULT_CHUNK_SEC,
+                 concurrency: int = ASR_CONCURRENCY):
         load_dotenv()
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY not set in .env")
-        self.client = genai.Client(api_key=api_key)
+        # request timeout so a network blip raises (→ retried) instead of hanging forever
+        self.client = genai.Client(api_key=api_key,
+                                   http_options=types.HttpOptions(timeout=180_000))
         self.model = model
         self.chunk_sec = chunk_sec
+        self.concurrency = max(1, concurrency)
+
+    # --- the only un-tested boundary: the live API call + audio split ---
+
+    def _call_api(self, audio_path: object) -> "tuple[Optional[list], str]":
+        """Upload + generate (structured output). Returns (rows|None, finish_reason).
+        finish_reason MAX_TOKENS → (None, 'MAX_TOKENS') so the caller splits the audio."""
+        for attempt in range(5):
+            try:
+                audio_file = self.client.files.upload(file=str(audio_path))
+                deadline = time.monotonic() + FILE_ACTIVE_TIMEOUT_SEC
+                while audio_file.state.name == "PROCESSING" and time.monotonic() < deadline:
+                    time.sleep(1)
+                    audio_file = self.client.files.get(name=audio_file.name)
+                if audio_file.state.name != "ACTIVE":
+                    raise RuntimeError(f"Gemini file upload not ACTIVE: {audio_file.state.name}")
+                resp = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[ASR_PROMPT, audio_file],
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                        max_output_tokens=MAX_OUTPUT_TOKENS,
+                        response_mime_type="application/json",
+                        response_schema=list[_AsrRow],
+                    ),
+                )
+                finish = _finish_reason(resp)
+                if "MAX_TOKENS" in finish:
+                    return None, "MAX_TOKENS"          # signal: split + retry on halves
+                return json.loads(resp.text or "[]"), finish
+            except json.JSONDecodeError:                # rare partial body → re-request
+                if attempt < 4:
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                raise
+            except Exception as e:                      # transient overload/disconnect → retry
+                if _transient(e) and attempt < 4:
+                    print(f"    [transcribe] transient ({str(e)[:70]}) — retry {attempt + 1}/5",
+                          flush=True)
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise
+        raise RuntimeError("ASR call failed after retries")
+
+    def _split_audio(self, audio_path: object, offset: float) -> "list[tuple[object, float]]":
+        """Halve an over-dense audio chunk via ffmpeg; offsets map onto the event timeline."""
+        p = Path(audio_path)
+        half = _probe_duration(p) / 2.0
+        a = p.with_name(f"{p.stem}_a{p.suffix}")
+        b = p.with_name(f"{p.stem}_b{p.suffix}")
+        subprocess.run(["ffmpeg", "-y", "-i", str(p), "-t", str(half), "-c", "copy", str(a)],
+                       check=True, capture_output=True)
+        subprocess.run(["ffmpeg", "-y", "-i", str(p), "-ss", str(half), "-c", "copy", str(b)],
+                       check=True, capture_output=True)
+        return [(a, offset), (b, offset + half)]
+
+    def _transcribe_chunk(self, chunk_path: Path, offset_sec: float) -> list[Segment]:
+        return _transcribe_segment(chunk_path, offset_sec, self._call_api, self._split_audio)
+
+    # --- orchestration (parallel, cache-first) ---
+
+    def _chunk_segments(self, i: int, n: int, chunk_path: Path, offset: float) -> list[Segment]:
+        """Transcribe one chunk (cache-first). Independent of every other chunk."""
+        cache = chunk_path.with_suffix(".segments.json")
+        if cache.exists():  # resumable: prior run finished this chunk's API call
+            segs = [Segment.model_validate(s) for s in json.loads(cache.read_text())]
+            print(f"  [transcribe] chunk {i}/{n} @ {offset:.0f}s … CACHED ({len(segs)} seg)",
+                  flush=True)
+            return segs
+        print(f"  [transcribe] chunk {i}/{n} @ {offset:.0f}s … start", flush=True)
+        segs = self._transcribe_chunk(chunk_path, offset)
+        cache.write_text(json.dumps([s.model_dump(mode="json") for s in segs], indent=2))
+        print(f"  [transcribe] chunk {i}/{n} @ {offset:.0f}s … done (+{len(segs)} seg)",
+              flush=True)
+        return segs
 
     def transcribe(self, audio_path: Path, duration: float, workdir: Path) -> list[Segment]:
         chunks = self._chunk_audio(audio_path, workdir)
-        all_segs: list[Segment] = []
-        for i, (chunk_path, offset) in enumerate(chunks, start=1):
-            chunk_cache = chunk_path.with_suffix(".segments.json")
-            if chunk_cache.exists():
-                # Resumable: prior run completed this chunk's API call. Skip Gemini.
-                segs = [Segment.model_validate(s) for s in json.loads(chunk_cache.read_text())]
-                print(f"  [transcribe] chunk {i}/{len(chunks)} @ {offset:.0f}s "
-                      f"({chunk_path.name})… CACHED ({len(segs)} segments)", flush=True)
-            else:
-                print(f"  [transcribe] chunk {i}/{len(chunks)} @ {offset:.0f}s "
-                      f"({chunk_path.name})…", flush=True)
-                segs = self._transcribe_chunk(chunk_path, offset)
-                # Per-chunk atomic write so a kill mid-loop never costs more
-                # than the in-flight chunk's API spend on rerun.
-                chunk_cache.write_text(json.dumps(
-                    [s.model_dump(mode="json") for s in segs], indent=2,
-                ))
-                print(f"    + {len(segs)} segments")
-            all_segs.extend(segs)
+        n = len(chunks)
+        tasks = [(i, cp, off) for i, (cp, off) in enumerate(chunks, start=1)]
+        by_idx: dict[int, list[Segment]] = {}
 
-        for s in all_segs:
-            s.start = max(0.0, min(s.start, duration))
-            s.end = max(s.start, min(s.end, duration))
-        # drop zero-duration segments — usually tail artifacts where Gemini
-        # extrapolated past the clip end and got clamped flat
-        all_segs = [s for s in all_segs if s.end > s.start]
-        all_segs.sort(key=lambda s: s.start)
-        return all_segs
+        workers = min(self.concurrency, n)
+        if workers <= 1:
+            for i, cp, off in tasks:
+                by_idx[i] = self._chunk_segments(i, n, cp, off)
+        else:
+            print(f"  [transcribe] {n} chunks · {workers}-way parallel", flush=True)
+            ex = ThreadPoolExecutor(max_workers=workers)
+            try:
+                futs = {ex.submit(self._chunk_segments, i, n, cp, off): i
+                        for i, cp, off in tasks}
+                for fut in as_completed(futs):
+                    by_idx[futs[fut]] = fut.result()
+            finally:
+                ex.shutdown(wait=True, cancel_futures=True)
+
+        return _reassemble(by_idx, duration)
 
     def _chunk_audio(self, audio_path: Path, workdir: Path) -> list[tuple[Path, float]]:
         chunk_dir = workdir / "chunks"
@@ -106,43 +277,6 @@ class GeminiTranscriber:
         )
         chunks = sorted(chunk_dir.glob("chunk_*.wav"))
         return [(c, i * self.chunk_sec) for i, c in enumerate(chunks)]
-
-    def _transcribe_chunk(self, chunk_path: Path, offset_sec: float) -> list[Segment]:
-        audio_file = self.client.files.upload(file=str(chunk_path))
-        deadline = time.monotonic() + FILE_ACTIVE_TIMEOUT_SEC
-        while audio_file.state.name == "PROCESSING" and time.monotonic() < deadline:
-            time.sleep(1)
-            audio_file = self.client.files.get(name=audio_file.name)
-        if audio_file.state.name != "ACTIVE":
-            raise RuntimeError(f"Gemini file upload not ACTIVE: {audio_file.state.name}")
-
-        resp = self.client.models.generate_content(
-            model=self.model,
-            contents=[ASR_PROMPT, audio_file],
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                # Disable thinking — verbatim ASR doesn't benefit from it, and
-                # thinking causes 5-10x slowdown on long audio chunks (observed
-                # 25+ min stall on a 10-min chunk that should take ~1 min).
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        raw = util.strip_fences(resp.text or "")
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Gemini returned non-JSON ({chunk_path.name}): {raw[:300]}…") from e
-
-        segs: list[Segment] = []
-        for s in parsed:
-            segs.append(Segment(
-                start=float(s["start"]) + offset_sec,
-                end=float(s["end"]) + offset_sec,
-                text=str(s["text"]).strip(),
-                speaker_id=s.get("speaker_id"),
-                language=s.get("language"),
-            ))
-        return segs
 
 
 def transcribe(audio_path: Path, duration: float, workdir: Path,
