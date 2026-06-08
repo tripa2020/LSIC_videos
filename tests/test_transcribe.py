@@ -62,6 +62,9 @@ def test_transient_classifier():
     assert _transient(RuntimeError("503 UNAVAILABLE"))
     assert _transient(Exception("Server disconnected without sending a response"))
     assert _transient(Exception("The read operation timed out"))
+    # DNS blips on flaky networks must be retryable too (the synth-stage gap)
+    assert _transient(Exception("[Errno 8] nodename nor servname provided, or not known"))
+    assert _transient(Exception("[Errno -2] Name or service not known"))
     assert not _transient(ValueError("bad value"))
     assert not _transient(KeyError("start"))
 

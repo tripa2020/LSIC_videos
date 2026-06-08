@@ -28,7 +28,7 @@ from PIL import Image
 from scenedetect import detect, ContentDetector
 
 from src import util
-from src.contracts import Caption, IngestResult, Segment
+from src.contracts import Caption, IngestResult, Segment, VideoPart
 
 
 WORK_ROOT = Path("work")
@@ -59,6 +59,11 @@ Return ONLY a JSON object (no prose, no markdown fences) with these fields:
 If the frame is clearly a slide, prioritize verbatim text capture."""
 
 
+def _transient(e: Exception) -> bool:
+    """Retryable Gemini/network/DNS errors — delegates to the shared classifier."""
+    return util.is_transient(e)
+
+
 class Describer(Protocol):
     def caption(self, image_path: Path) -> dict: ...
 
@@ -69,23 +74,34 @@ class GeminiDescriber:
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY not set in .env")
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=api_key,
+                                   http_options=types.HttpOptions(timeout=90_000))
         self.model = model
 
     def caption(self, image_path: Path) -> dict:
         img_bytes = image_path.read_bytes()
-        resp = self.client.models.generate_content(
-            model=self.model,
-            contents=[
-                VLM_PROMPT,
-                types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        return json.loads(util.strip_fences(resp.text or ""))
+        last: Exception | None = None
+        for attempt in range(4):
+            try:
+                resp = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[
+                        VLM_PROMPT,
+                        types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+                return json.loads(util.strip_fences(resp.text or ""))
+            except Exception as e:  # transient overload → backoff + retry
+                last = e
+                if _transient(e) and attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
+        raise last  # unreachable
 
 
 def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
@@ -99,23 +115,38 @@ def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
 
     ingest_manifest = workdir / util.STAGE_INGEST / "manifest.json"
     ing = IngestResult.model_validate_json(ingest_manifest.read_text())
-    if ing.video_path is None:
+    if ing.video_path is None and not ing.video_parts:
         raise RuntimeError(f"{event_id} has no video (notes-only event)")
+
+    # parts = the event's N videos on one timeline; legacy events → synthesize one part
+    parts = ing.video_parts or [VideoPart(
+        key="0", path=ing.video_path, duration_sec=ing.duration_sec, offset_sec=0.0)]
 
     segments: list[Segment] = []
     transcript_path = workdir / util.STAGE_TRANSCRIPT / "transcript.json"
     if transcript_path.exists():
         segments = [Segment.model_validate(s) for s in json.loads(transcript_path.read_text())]
 
-    candidates = _collect_candidates(Path(ing.video_path), ing.duration_sec, segments)
-    print(f"  [visual] candidates: {len(candidates)} "
-          f"(scene={sum(1 for _, t in candidates if t == 'scene')} "
-          f"safety={sum(1 for _, t in candidates if t == 'safety')} "
-          f"audio-cue={sum(1 for _, t in candidates if t == 'audio-cue')})",
+    # extract per video in part-local time, then lift onto the event timeline (+offset).
+    # phash set is shared across parts so a slide repeated across videos dedups once.
+    kept: list[tuple[float, Path, str]] = []
+    seen_hashes: list[imagehash.ImageHash] = []
+    for part in parts:
+        local_segs = [s.model_copy(update={"start": s.start - part.offset_sec,
+                                           "end": s.end - part.offset_sec})
+                      for s in segments
+                      if part.offset_sec <= s.start < part.offset_sec + part.duration_sec]
+        cand = _collect_candidates(Path(part.path), part.duration_sec, local_segs)
+        part_kept = _extract_and_dedup(Path(part.path), cand, keyframes_dir / "frames",
+                                       seen_hashes, key=part.key)
+        for local_t, png, trig in part_kept:
+            kept.append((local_t + part.offset_sec, png, trig))
+        if len(parts) > 1:
+            print(f"  [visual] part {part.key} @ +{part.offset_sec:.0f}s: "
+                  f"{len(cand)} candidates → {len(part_kept)} frames", flush=True)
+    kept.sort(key=lambda x: x[0])
+    print(f"  [visual] {len(parts)} video(s) · {len(kept)} unique frames after phash dedup",
           flush=True)
-
-    kept = _extract_and_dedup(Path(ing.video_path), candidates, keyframes_dir / "frames")
-    print(f"  [visual] after phash dedup: {len(kept)} unique frames", flush=True)
 
     describer = describer or GeminiDescriber()
     captions: list[Caption] = []
@@ -185,10 +216,13 @@ def _collect_candidates(video_path: Path, duration_sec: float,
 
 
 def _extract_and_dedup(video_path: Path, candidates: list[tuple[float, str]],
-                       kf_dir: Path) -> list[tuple[float, Path, str]]:
+                       kf_dir: Path, seen_hashes: list[imagehash.ImageHash],
+                       key: str = "0") -> list[tuple[float, Path, str]]:
+    """Extract candidate frames from one video (part-local times). seen_hashes is
+    shared across an event's videos so a repeated slide dedups once. Returns
+    (part_local_time, png, trigger); caller adds the part's offset."""
     kf_dir.mkdir(parents=True, exist_ok=True)
     kept: list[tuple[float, Path, str]] = []
-    seen_hashes: list[imagehash.ImageHash] = []
     cap = cv2.VideoCapture(str(video_path))
     try:
         for time_sec, trigger in candidates:
@@ -201,7 +235,7 @@ def _extract_and_dedup(video_path: Path, candidates: list[tuple[float, str]],
             phash = imagehash.phash(img)
             if any(phash - h <= PHASH_HAMMING_MAX for h in seen_hashes):
                 continue
-            png_path = kf_dir / f"frame_{int(time_sec * 10):08d}.jpg"
+            png_path = kf_dir / f"frame_{key}_{int(time_sec * 10):08d}.jpg"
             img.save(png_path, "JPEG", quality=JPEG_QUALITY)
             seen_hashes.append(phash)
             kept.append((time_sec, png_path, trigger))

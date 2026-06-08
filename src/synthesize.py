@@ -426,22 +426,38 @@ def _gemini_client() -> genai.Client:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set in .env")
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=api_key,
+                        http_options=types.HttpOptions(timeout=300_000))
+
+
+def _synth_transient(e: Exception) -> bool:
+    """Retryable Gemini/network/DNS errors — delegates to the shared classifier."""
+    return util.is_transient(e)
 
 
 def _call_gemini_json(client: genai.Client, system: str, user: str,
                       max_tokens: int = 6000) -> dict:
-    resp = client.models.generate_content(
-        model=SYNTH_MODEL,
-        contents=[user],
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
-            max_output_tokens=max_tokens,
-            response_mime_type="application/json",
-        ),
-    )
+    resp = None
+    for attempt in range(5):
+        try:
+            resp = client.models.generate_content(
+                model=SYNTH_MODEL,
+                contents=[user],
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
+                    max_output_tokens=max_tokens,
+                    response_mime_type="application/json",
+                ),
+            )
+            break
+        except Exception as e:  # transient overload/disconnect → backoff + retry
+            if _synth_transient(e) and attempt < 4:
+                import time as _t
+                _t.sleep(5 * (attempt + 1))
+                continue
+            raise
     raw = util.strip_fences(resp.text or "")
     try:
         return json.loads(raw)

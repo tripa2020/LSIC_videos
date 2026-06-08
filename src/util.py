@@ -144,3 +144,26 @@ def is_complete(path: Path) -> bool:
         return m.get("status") == "complete"
     except (json.JSONDecodeError, OSError):
         return False
+
+
+# ---- one shared retry classifier for every Gemini stage (transcribe/visual/synth) ----
+
+_TRANSIENT_MARKERS = (
+    # Gemini server-side: overload / rate / deadline
+    "503", "429", "500", "502", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
+    "overloaded", "high demand", "DEADLINE",
+    # dropped connections
+    "RemoteProtocolError", "Server disconnected", "disconnected",
+    "ConnectError", "ConnectionError", "RemoteDisconnected", "EOF occurred",
+    "timed out", "Timeout",
+    # DNS / name-resolution blips on flaky networks
+    "nodename nor servname", "getaddrinfo", "Name or service not known",
+    "Temporary failure in name resolution", "Errno 8", "Errno -2", "Errno -3",
+)
+
+
+def is_transient(e: Exception) -> bool:
+    """True for retryable Gemini/network errors (overload, deadline, dropped
+    connection, or DNS blip). Single source of truth across all API stages."""
+    msg = str(e)
+    return any(k in msg for k in _TRANSIENT_MARKERS)

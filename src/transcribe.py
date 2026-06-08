@@ -68,14 +68,8 @@ class _AsrRow(BaseModel):
 # ---- pure, injectable logic (unit-tested with fakes, no network) -------------
 
 def _transient(e: Exception) -> bool:
-    """Retryable Gemini/network errors: overload, deadline, or dropped connection."""
-    msg = str(e)
-    return any(k in msg for k in (
-        "503", "429", "500", "502", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
-        "overloaded", "high demand", "DEADLINE", "RemoteProtocolError",
-        "Server disconnected", "ConnectError", "ConnectionError",
-        "RemoteDisconnected", "timed out", "Timeout", "EOF occurred",
-    ))
+    """Retryable Gemini/network/DNS errors — delegates to the shared classifier."""
+    return util.is_transient(e)
 
 
 def _parse_segments(parsed: Optional[list], offset: float) -> list[Segment]:
