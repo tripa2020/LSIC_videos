@@ -35,7 +35,6 @@ from src.contracts import IngestResult, Segment  # noqa: F401 (Segment used abov
 WORK_ROOT = Path("work")
 DEFAULT_CHUNK_SEC = 300        # 5-min chunks: lighter calls survive flaky networks
 GEMINI_MODEL = "gemini-2.5-flash"
-FILE_ACTIVE_TIMEOUT_SEC = 60
 ASR_CONCURRENCY = int(os.getenv("ASR_CONCURRENCY", "12"))  # chunks transcribed in parallel
 MAX_OUTPUT_TOKENS = 32_768     # raise from the 8,192 default so dense chunks don't truncate
 MAX_SPLIT_DEPTH = 3            # backstop: halve a chunk that still overflows, up to 3 levels
@@ -146,6 +145,19 @@ def _probe_duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
+def _opus_cmd(src: Path) -> list[str]:
+    """ffmpeg command: audio → 32 kbps mono Opus/OGG on stdout. Gemini downsamples
+    all audio to 16 kbps anyway, so this is ~8x smaller than 16-bit WAV with no
+    speech-quality loss — smaller inline payload, faster upload, fewer timeouts."""
+    return ["ffmpeg", "-y", "-v", "error", "-i", str(src),
+            "-c:a", "libopus", "-b:a", "32k", "-ac", "1", "-ar", "16000",
+            "-f", "ogg", "pipe:1"]
+
+
+def _to_opus_bytes(src: Path) -> bytes:
+    return subprocess.run(_opus_cmd(src), check=True, capture_output=True).stdout
+
+
 class Transcriber(Protocol):
     def transcribe(self, audio_path: Path, duration: float, workdir: Path) -> list[Segment]: ...
 
@@ -167,20 +179,15 @@ class GeminiTranscriber:
     # --- the only un-tested boundary: the live API call + audio split ---
 
     def _call_api(self, audio_path: object) -> "tuple[Optional[list], str]":
-        """Upload + generate (structured output). Returns (rows|None, finish_reason).
-        finish_reason MAX_TOKENS → (None, 'MAX_TOKENS') so the caller splits the audio."""
+        """Inline-Opus + generate (structured output). Returns (rows|None, finish_reason).
+        finish_reason MAX_TOKENS → (None, 'MAX_TOKENS') so the caller splits the audio.
+        The audio is transcoded to ~32 kbps Opus and sent inline (one request, no upload)."""
+        part = types.Part.from_bytes(data=_to_opus_bytes(Path(audio_path)), mime_type="audio/ogg")
         for attempt in range(5):
             try:
-                audio_file = self.client.files.upload(file=str(audio_path))
-                deadline = time.monotonic() + FILE_ACTIVE_TIMEOUT_SEC
-                while audio_file.state.name == "PROCESSING" and time.monotonic() < deadline:
-                    time.sleep(1)
-                    audio_file = self.client.files.get(name=audio_file.name)
-                if audio_file.state.name != "ACTIVE":
-                    raise RuntimeError(f"Gemini file upload not ACTIVE: {audio_file.state.name}")
                 resp = self.client.models.generate_content(
                     model=self.model,
-                    contents=[ASR_PROMPT, audio_file],
+                    contents=[ASR_PROMPT, part],
                     config=types.GenerateContentConfig(
                         temperature=0.0,
                         thinking_config=types.ThinkingConfig(thinking_budget=0),

@@ -3,12 +3,24 @@
 The live API call is the only un-tested boundary; everything below is pure and
 exercised with in-memory fakes (CLAUDE.md Engineering Discipline).
 """
+from pathlib import Path
+
 import pytest
 
 from src.contracts import Segment
 from src.transcribe import (
-    _parse_segments, _reassemble, _transcribe_segment, _transient,
+    _opus_cmd, _parse_segments, _reassemble, _transcribe_segment, _transient,
 )
+
+
+# --- #6 inline/Opus encode command ---
+
+def test_opus_cmd_is_32k_mono_ogg_to_stdout():
+    cmd = _opus_cmd(Path("chunk_000.wav"))
+    assert cmd[0] == "ffmpeg" and cmd[-1] == "pipe:1"
+    assert "libopus" in cmd and "32k" in cmd and "ogg" in cmd
+    assert cmd[cmd.index("-ac") + 1] == "1"          # mono
+    assert "chunk_000.wav" in cmd                    # reads the given source
 
 
 # --- #2 structured parse ---
