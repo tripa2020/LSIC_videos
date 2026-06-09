@@ -139,7 +139,7 @@ LSIC_videos/
   hybrid `submit` (inline ≤100 / JSONL-file above), `poll`/`is_terminal`,
   `resolve(job) -> {custom_id: response}`. **Knows nothing about stage caches.** Failed
   `custom_id`s absent from the map (R4). ✅ 13 fakes-only tests, 100% coverage. `<!-- progress: P1_BATCH (b6cd640) -->`
-- [~] **M-B2 — `src/llm_caller.py` (seam ✅) + stage calls (pending)** (R2) — `Caller` protocol with
+- [x] **M-B2 — `src/llm_caller.py` (seam ✅) + stage calls ✅** (R2) — `Caller` protocol with
   `generate(...)`; `SyncCaller` wraps today's `genai` call (byte-identical), `BatchCaller`
   buffers fan-out → `batch_gemini.submit` → `resolve`. The four stages call
   `caller.generate(...)` unconditionally and each mints its own `custom_id` + writes its
@@ -148,10 +148,17 @@ LSIC_videos/
   *Gate:* `/python-unit-tests` — `SyncCaller` enqueues the identical call today makes;
   `BatchCaller` buffers→resolves to the same per-stage cache writes.
   *Acceptance:* with `SyncCaller` injected (default), the 11 existing tests pass unchanged.
-  **Status:** `llm_caller.py` (Caller/SyncCaller/BatchCaller) ✅ 12 fakes-only tests, 100%
-  coverage (b6cd640). **Remaining:** wire the four stages to call `generate_many()` + minting
-  their own `custom_id`, and inject the caller from `main.py` (`--batch`). Each stage = its
-  own small green step; default (no caller) keeps today's exact code path.
+  **Status: DONE (84ba49a).** `llm_caller.py` (Caller/SyncCaller/BatchCaller/`prefill`) ✅.
+  Wired via **batch-prefill**: each heavy stage (`transcribe`/`visual`/`slide_book`) has a
+  `batch_prefill_*` that bulk-fills its own per-item cache (R1) through one batch; the
+  untouched sync loop then hits cache, so `--batch` absent ⇒ byte-identical (caller=None).
+  ASR offset rides in the custom_id; dense chunks defer to the sync split (R4). Synthesis
+  stays sync (≈12 interdependent calls/event). `main.py --batch` interleaves prefill before
+  each stage. 46 tests green; batch modules 99–100% coverage.
+  **Untested-on-purpose (M-C2 live):** the three `batch_prefill_*` orchestrators + the live
+  SDK response shape — they need ffmpeg/video/genai; their shared logic (`prefill`,
+  `response_text`, transport) is unit-tested. **Also done:** `report.py` promotes
+  `equations.md` into `Report/` (4b1520d).
 
 ### PART 2 — Cloud + Docker, 5 full events  `<!-- progress: P2_CLOUD_SLICE -->`
 
