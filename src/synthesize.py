@@ -316,9 +316,13 @@ def synthesize_full(event_id: str, work_root: Path = Path("work")) -> Path:
     from src.contracts import IngestResult
     from src.ingest import load_events_json
 
-    client = _gemini_client()
-
     workdir = work_root / "events" / event_id
+    out_path = workdir / util.STAGE_BRIEFING / "notes.md"
+    if util.is_complete(out_path):       # resume-free: skip if already synthesized (no re-spend)
+        print(f"  [synthesize] {event_id} … CACHED", flush=True)
+        return out_path
+
+    client = _gemini_client()
 
     # 1. Load all artifacts
     ing = IngestResult.model_validate_json(
