@@ -75,7 +75,7 @@ selected_manifest.json ──(topic filter: Energy∪ISRU)──► 122 event-id
 | OQ1 | Gemini key tier — paid? (Batch enqueue limit + quota)                 | Commander | Part 2 M-C2 (verify-first on VM) |
 | OQ2 | GCS bucket name + region; VM machine type (default e2-standard-8 CPU) | Commander | Part 2 M-C2                      |
 | OQ3 | Total $ ceiling for Part 3 (default: ~$75–100 batch-priced)           | Commander | before Part 3                    |
-| OQ4 | One-event reconciliation: filter yields 130, Commander stated 129     | agent     | Part 2 M-C3 (log the delta)      |
+| ~~OQ4~~ | ✅ RESOLVED — `topic_filter` yields exactly **129 / 122** (matches the original spec; my planning-time 130 was an imprecise ad-hoc grouping). Pinned by `test_real_manifest_locked_counts`. | — | done (M-C3) |
 
 ### Deliverable / Output Contract
 
@@ -168,7 +168,7 @@ LSIC_videos/
   produces a Report bundle; diff `notes.md` vs known-good local (container parity).
 - [ ] **M-C2 — GCP provisioning** (`infra/`) — VM + GCS bucket + service account scripts +
   steps. *Gate (verify-first):* on the VM, confirm Gemini key tier (OQ1) + GCS write.
-- [ ] **M-C3 — `src/topic_filter.py`** — compute Energy∪ISRU event-id set; feed
+- [x] **M-C3 — `src/topic_filter.py`** ✅ (129/122 pinned) — compute Energy∪ISRU event-id set; feed
   `group_manifest.build(event_ids)`. *Gate:* `/python-unit-tests` — set == 130/122,
   deterministic; log the 130-vs-129 delta (OQ4).
 - [ ] **M-C4 — 4 h aggregate cap, once at ingest** (`ingest.py`, R3) — sum video durations
