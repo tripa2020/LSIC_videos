@@ -22,10 +22,12 @@ ChokepointStage = Literal["Research", "Development", "Funding", "Implementation"
 
 class Asset(BaseModel):
     kind: AssetKind
-    path: Path
-    sha256: str = Field(..., min_length=12, max_length=64)
-    lsic_id: int
+    path: Optional[Path] = None            # None for URL-backed video until fetched
+    sha256: Optional[str] = Field(default=None, min_length=12, max_length=64)
+    lsic_id: Optional[int] = None          # None for YouTube (no file-id on the site)
     date_in_filename: Optional[date] = None
+    source_url: Optional[str] = None       # YouTube/Zoom URL; ingest fetches → path
+    meta: Optional[dict] = None            # catalog truth: speaker, title, topics, t= windows
 
 
 class Event(BaseModel):
@@ -33,17 +35,32 @@ class Event(BaseModel):
     date: date
     assets: list[Asset]
     duration_sec: Optional[float] = None
+    meta: Optional[dict] = None            # event-level catalog truth (name, topics, speakers)
+
+
+class VideoPart(BaseModel):
+    """One video within an event. Events can have N videos (Zoom split recordings,
+    Bi-Annual sessions). Parts are concatenated onto one event timeline via offset_sec."""
+    key: str                               # stable id: lsic_id or yt_video_id
+    path: Optional[Path] = None            # local file (after fetch)
+    source_url: Optional[str] = None       # Zoom/YouTube URL
+    duration_sec: float
+    offset_sec: float = 0.0                # cumulative start on the event timeline
+    fps: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 class IngestResult(BaseModel):
     event_id: str
     workdir: Path
-    audio_path: Optional[Path] = None
-    video_path: Optional[Path] = None
-    duration_sec: float
+    audio_path: Optional[Path] = None      # concatenated audio across all parts
+    video_path: Optional[Path] = None      # first part (back-compat / single-video)
+    duration_sec: float                    # total across all parts
     fps: Optional[float] = None
     width: Optional[int] = None
     height: Optional[int] = None
+    video_parts: list[VideoPart] = []      # NEW — empty for legacy single-video events
 
 
 class Segment(BaseModel):

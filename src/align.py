@@ -72,6 +72,11 @@ def align(event_id: str, work_root: Path = WORK_ROOT) -> AlignmentResult:
     sections = _cut_sections(segments)
     _attach_keyframes(sections, captions)
     presentations = _match_presentations(decks, segments)
+    # YouTube events have no decks to fingerprint — seed presentation windows
+    # from the catalog `?t=` offsets recorded in meta.json (mapped onto the
+    # event timeline via each video's offset). Deck-backed events seed nothing.
+    presentations += _seed_presentations_from_meta(workdir, ing)
+    presentations.sort(key=lambda p: p.start)
 
     evidence_list = _emit_evidence(segments, captions, decks, presentations)
     _attach_evidence_ids(sections, evidence_list)
@@ -231,6 +236,38 @@ def _match_presentations(decks: list[tuple[str, DeckIndex]],
 
     presentations.sort(key=lambda p: p.start)
     return presentations
+
+
+def _seed_presentations_from_meta(workdir: Path, ing: IngestResult) -> list[Presentation]:
+    """Build presentations from YouTube `?t=` windows (meta.json) for deck-less
+    events. Each window's video-local times are lifted onto the event timeline
+    by that video's offset_sec; the last window of a video runs to video end."""
+    meta_path = workdir / "meta.json"
+    if not meta_path.exists():
+        return []
+    meta = json.loads(meta_path.read_text())
+    parts = {p.key: p for p in ing.video_parts}
+    seeded: list[Presentation] = []
+    for a in meta.get("assets", []):
+        windows = a.get("presentations")
+        vid = a.get("yt_video_id")
+        if not windows or not vid:
+            continue
+        part = parts.get(str(vid))
+        if part is None:
+            continue  # video didn't ingest (dead/skipped) — drop its orphaned windows
+        off = part.offset_sec
+        vdur = part.duration_sec
+        for w in windows:
+            start = float(w.get("t_start") or 0) + off
+            end = (float(w["t_end"]) + off) if w.get("t_end") is not None else off + vdur
+            seeded.append(Presentation(
+                asset_id=f"yt_{vid}_{w.get('row_id')}",
+                title=(w.get("title") or f"yt_{vid}")[:120],
+                start=start, end=max(end, start + 1.0),
+                slides_count=0, match_score=1.0,
+            ))
+    return seeded
 
 
 def _overlaps(s: float, e: float, used: list[tuple[float, float]]) -> bool:
