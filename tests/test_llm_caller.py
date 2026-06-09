@@ -10,7 +10,7 @@ Seams controlled: the genai client (faked) and time.sleep (injected). No network
 import pytest
 
 from src import batch_gemini as bg
-from src.llm_caller import BatchCaller, LLMRequest, SyncCaller, _gen_kwargs
+from src.llm_caller import BatchCaller, LLMRequest, SyncCaller, _gen_kwargs, prefill
 
 
 # --- SyncCaller: byte-for-byte today's call, keyed by custom_id ---
@@ -119,3 +119,42 @@ def test_batch_caller_succeeds_immediately_no_sleep():
         [LLMRequest("c0", "m", ["a"], None)])
     assert out == {"c0": 1}
     assert slept == []                             # terminal on first poll → no wait
+
+
+# --- prefill: bulk cache-fill; failed ids left unwritten (R4) ---
+
+class FakeCaller:
+    """Returns a scripted {custom_id: response}; omitted ids simulate batch failures."""
+
+    def __init__(self, result):
+        self.result = result
+        self.seen = None
+
+    def generate_many(self, requests):
+        self.seen = [r.custom_id for r in requests]
+        return self.result
+
+
+def test_prefill_writes_each_resolved_id_and_counts():
+    written = {}
+    caller = FakeCaller({"k1": "R1", "k2": "R2"})
+    reqs = [LLMRequest("k1", "m", ["a"]), LLMRequest("k2", "m", ["b"])]
+    n = prefill(caller, reqs, lambda cid, resp: written.__setitem__(cid, resp))
+    assert n == 2
+    assert written == {"k1": "R1", "k2": "R2"}
+    assert caller.seen == ["k1", "k2"]             # all requests forwarded once
+
+
+def test_prefill_skips_failed_id():     # R4: failed ids absent from result
+    written = {}
+    caller = FakeCaller({"k1": "R1"})              # k2 absent → simulated failure
+    reqs = [LLMRequest("k1", "m", ["a"]), LLMRequest("k2", "m", ["b"])]
+    n = prefill(caller, reqs, lambda cid, resp: written.__setitem__(cid, resp))
+    assert n == 1
+    assert "k2" not in written                     # left uncached → sync loop fills it
+
+
+def test_prefill_empty_is_noop():
+    calls = []
+    n = prefill(FakeCaller({}), [], lambda cid, resp: calls.append(cid))
+    assert n == 0 and calls == []

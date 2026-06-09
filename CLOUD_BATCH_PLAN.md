@@ -135,13 +135,11 @@ LSIC_videos/
 
 ### PART 1 — Batch processing (code, untested)  `<!-- progress: P1_BATCH -->`
 
-- [ ] **M-B1 — `src/batch_gemini.py`** (transport only, R1+R4) — `build_jsonl(requests)`,
-  `submit(jsonl)`, `poll(job)`, `resolve(job) -> {custom_id: response}`. **Knows nothing
-  about stage caches.** Failed `custom_id`s are simply absent from the returned map (R4 —
-  resume re-enqueues them; no retry code here). Audio/images via Files API.
-  *Gate:* `/python-unit-tests` — `build_jsonl` shape, `resolve` returns `{id: resp}`,
-  failed id absent from map. Green before close.
-- [ ] **M-B2 — `src/llm_caller.py` + stage calls** (R2) — `Caller` protocol with
+- [x] **M-B1 — `src/batch_gemini.py`** (transport only, R1+R4) — `build_jsonl(requests)`,
+  hybrid `submit` (inline ≤100 / JSONL-file above), `poll`/`is_terminal`,
+  `resolve(job) -> {custom_id: response}`. **Knows nothing about stage caches.** Failed
+  `custom_id`s absent from the map (R4). ✅ 13 fakes-only tests, 100% coverage. `<!-- progress: P1_BATCH (b6cd640) -->`
+- [~] **M-B2 — `src/llm_caller.py` (seam ✅) + stage calls (pending)** (R2) — `Caller` protocol with
   `generate(...)`; `SyncCaller` wraps today's `genai` call (byte-identical), `BatchCaller`
   buffers fan-out → `batch_gemini.submit` → `resolve`. The four stages call
   `caller.generate(...)` unconditionally and each mints its own `custom_id` + writes its
@@ -150,6 +148,10 @@ LSIC_videos/
   *Gate:* `/python-unit-tests` — `SyncCaller` enqueues the identical call today makes;
   `BatchCaller` buffers→resolves to the same per-stage cache writes.
   *Acceptance:* with `SyncCaller` injected (default), the 11 existing tests pass unchanged.
+  **Status:** `llm_caller.py` (Caller/SyncCaller/BatchCaller) ✅ 12 fakes-only tests, 100%
+  coverage (b6cd640). **Remaining:** wire the four stages to call `generate_many()` + minting
+  their own `custom_id`, and inject the caller from `main.py` (`--batch`). Each stage = its
+  own small green step; default (no caller) keeps today's exact code path.
 
 ### PART 2 — Cloud + Docker, 5 full events  `<!-- progress: P2_CLOUD_SLICE -->`
 

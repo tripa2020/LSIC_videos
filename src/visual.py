@@ -104,21 +104,12 @@ class GeminiDescriber:
         raise last  # unreachable
 
 
-def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
-                   describer: Optional[Describer] = None) -> list[Caption]:
-    workdir = work_root / "events" / event_id
-    keyframes_dir = workdir / util.STAGE_KEYFRAMES
-    keyframes_dir.mkdir(parents=True, exist_ok=True)
-    captions_path = keyframes_dir / "captions.json"
-    if util.is_complete(captions_path):
-        return [Caption.model_validate(c) for c in json.loads(captions_path.read_text())]
+def _kept_frames(ing: IngestResult, workdir: Path,
+                 keyframes_dir: Path) -> list[tuple[float, Path, str]]:
+    """Select + phash-dedup keyframes across the event's video parts on one timeline.
 
-    ingest_manifest = workdir / util.STAGE_INGEST / "manifest.json"
-    ing = IngestResult.model_validate_json(ingest_manifest.read_text())
-    if ing.video_path is None and not ing.video_parts:
-        raise RuntimeError(f"{event_id} has no video (notes-only event)")
-
-    # parts = the event's N videos on one timeline; legacy events → synthesize one part
+    Single source of frame selection: ``extract_visual`` (sync) and ``batch_prefill_captions``
+    (batch) both call it, so both caption the exact same frames into the same cache files."""
     parts = ing.video_parts or [VideoPart(
         key="0", path=ing.video_path, duration_sec=ing.duration_sec, offset_sec=0.0)]
 
@@ -147,6 +138,60 @@ def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
     kept.sort(key=lambda x: x[0])
     print(f"  [visual] {len(parts)} video(s) · {len(kept)} unique frames after phash dedup",
           flush=True)
+    return kept
+
+
+def batch_prefill_captions(event_id: str, caller, work_root: Path = WORK_ROOT) -> int:
+    """Batch-fill every uncached frame caption in one job, then return #written.
+
+    Writes visual's own ``<frame>.caption.json`` cache (R1). The subsequent ``extract_visual``
+    run finds them CACHED and makes no live call — so the sync path stays byte-identical.
+    Frames missing from the batch result (failures, R4) are left uncached for that loop."""
+    from google.genai import types
+    from src.batch_gemini import response_text
+    from src.llm_caller import LLMRequest, prefill
+
+    workdir = work_root / "events" / event_id
+    keyframes_dir = workdir / util.STAGE_KEYFRAMES
+    keyframes_dir.mkdir(parents=True, exist_ok=True)
+    ing = IngestResult.model_validate_json(
+        (workdir / util.STAGE_INGEST / "manifest.json").read_text())
+    pending = [(t, png, trig) for (t, png, trig) in _kept_frames(ing, workdir, keyframes_dir)
+               if not png.with_suffix(".caption.json").exists()]
+
+    reqs = [LLMRequest(
+                custom_id=str(png.with_suffix(".caption.json")),
+                model=GEMINI_MODEL,
+                contents=[VLM_PROMPT,
+                          types.Part.from_bytes(data=png.read_bytes(), mime_type="image/jpeg")],
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0)))
+            for (t, png, trig) in pending]
+
+    def write_one(cid: str, resp) -> None:
+        d = json.loads(util.strip_fences(response_text(resp) or "{}"))
+        d["caption_status"] = "ok"
+        Path(cid).write_text(json.dumps(d, indent=2))
+
+    return prefill(caller, reqs, write_one)
+
+
+def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
+                   describer: Optional[Describer] = None) -> list[Caption]:
+    workdir = work_root / "events" / event_id
+    keyframes_dir = workdir / util.STAGE_KEYFRAMES
+    keyframes_dir.mkdir(parents=True, exist_ok=True)
+    captions_path = keyframes_dir / "captions.json"
+    if util.is_complete(captions_path):
+        return [Caption.model_validate(c) for c in json.loads(captions_path.read_text())]
+
+    ingest_manifest = workdir / util.STAGE_INGEST / "manifest.json"
+    ing = IngestResult.model_validate_json(ingest_manifest.read_text())
+    if ing.video_path is None and not ing.video_parts:
+        raise RuntimeError(f"{event_id} has no video (notes-only event)")
+
+    kept = _kept_frames(ing, workdir, keyframes_dir)
 
     describer = describer or GeminiDescriber()
     captions: list[Caption] = []

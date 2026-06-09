@@ -109,6 +109,31 @@ def _norm_state(state: Any) -> str:
     return getattr(state, "name", str(state)).rsplit(".", 1)[-1]
 
 
+def response_text(resp: Any) -> str:
+    """Extract the model's text from a resolved batch response, shape-tolerantly.
+
+    Sync callers read ``resp.text``; a batch-resolved response may instead be a plain dict
+    (``candidates[0].content.parts[0].text``) or already a string. This bridges both so a
+    stage's prefill can reuse its existing text-parsing. Exact live dict shape verified at
+    M-C2; the branches below are unit-tested against fakes."""
+    if resp is None:
+        return ""
+    if isinstance(resp, str):
+        return resp
+    text = getattr(resp, "text", None)
+    if text is not None:
+        return text
+    if isinstance(resp, dict):
+        if isinstance(resp.get("text"), str):
+            return resp["text"]
+        try:
+            parts = resp["candidates"][0]["content"]["parts"]
+            return "".join(p.get("text", "") for p in parts)
+        except (KeyError, IndexError, TypeError):
+            return ""
+    return ""
+
+
 def submit(client, requests: list[BatchRequest], *,
            inline_threshold: int = INLINE_THRESHOLD) -> str:
     """Create a batch job and return its job name. Hybrid: inline under the threshold,

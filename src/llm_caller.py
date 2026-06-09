@@ -37,6 +37,25 @@ class Caller(Protocol):
     def generate_many(self, requests: list[LLMRequest]) -> dict[str, Any]: ...
 
 
+def prefill(caller: "Caller", requests: list[LLMRequest], write_one) -> int:
+    """Bulk-fill a stage's per-item caches through one batch (the heart of batch-mode).
+
+    Each ``LLMRequest.custom_id`` is the stage's cache key (e.g. the cache file path).
+    ``write_one(custom_id, response)`` parses that response and writes ONE cache entry —
+    the stage owns its cache format (R1). Failed ids are absent from the result, so they
+    stay uncached and the stage's normal (sync) loop fills them on the same run (R4).
+    Returns the number of caches written. The sync loop afterward simply hits cache, so a
+    stage's existing code path is byte-identical whether or not prefill ran first."""
+    if not requests:
+        return 0
+    responses = caller.generate_many(requests)
+    written = 0
+    for cid, resp in responses.items():
+        write_one(cid, resp)
+        written += 1
+    return written
+
+
 def _gen_kwargs(r: LLMRequest) -> dict:
     kwargs: dict[str, Any] = {"model": r.model, "contents": r.contents}
     if r.config is not None:

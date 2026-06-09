@@ -70,6 +70,40 @@ _STOPWORDS = {
 }
 
 
+def batch_prefill_slides(event_id: str, caller, work_root: Path = WORK_ROOT) -> int:
+    """Batch-fill every uncached slide-curation in one job; return #written.
+
+    Writes slide_book's own ``slide_NNN.curated.json`` cache (R1). The subsequent
+    ``slide_book`` run finds them CACHED and makes no live call. Slides missing from the
+    batch result (failures, R4) are left uncached and the sync loop fills them."""
+    from google.genai import types
+    from src.batch_gemini import response_text
+    from src.llm_caller import LLMRequest, prefill
+    from src.visual import GEMINI_MODEL
+
+    decks_dir = work_root / "events" / event_id / util.STAGE_INGEST / "decks"
+    if not decks_dir.is_dir():
+        return 0
+    pending = [(a, n, png) for (a, n, png) in _load_all_deck_slides(decks_dir)
+               if not png.with_suffix(".curated.json").exists()]
+
+    reqs = [LLMRequest(
+                custom_id=str(png.with_suffix(".curated.json")),
+                model=GEMINI_MODEL,
+                contents=[VLM_PROMPT,
+                          types.Part.from_bytes(data=png.read_bytes(), mime_type="image/png")],
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0)))
+            for (a, n, png) in pending]
+
+    def write_one(cid: str, resp) -> None:
+        d = json.loads(util.strip_fences(response_text(resp) or "{}"))
+        Path(cid).write_text(json.dumps(d, indent=2))
+
+    return prefill(caller, reqs, write_one)
+
+
 def slide_book(event_id: str, work_root: Path = WORK_ROOT) -> tuple[Path, Path, Path]:
     """Produce slides.pdf + slide_captions.md + equations.md. Returns all three paths."""
     workdir = work_root / "events" / event_id

@@ -221,7 +221,39 @@ def run_event_stages(evt: str,
     return True, None
 
 
-def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False) -> int:
+def _make_batch_caller():
+    """Build a BatchCaller over a real Gemini client (used only when --batch is passed)."""
+    import os
+
+    from dotenv import load_dotenv
+    from google import genai
+
+    from src.llm_caller import BatchCaller
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set — required for --batch")
+    return BatchCaller(genai.Client(api_key=api_key))
+
+
+def _staged(prefill_fn, caller, cmd):
+    """Wrap a stage so its batch prefill runs first when a caller is present. With caller=None
+    (default) the prefill is skipped entirely → the stage's sync path is byte-identical. A
+    prefill error is warned and swallowed; the sync cmd then fills any uncached item live."""
+    def run() -> int:
+        if caller is not None and prefill_fn is not None:
+            try:
+                n = prefill_fn(caller)
+                print(f"    [batch] prefilled {n} cache(s)", flush=True)
+            except Exception as e:
+                print(f"    [batch] prefill skipped ({str(e)[:80]}) — stage will run live",
+                      file=sys.stderr, flush=True)
+        return cmd()
+    return run
+
+
+def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
+                 batch: bool = False) -> int:
     """Chain ingest→transcribe→visual→align→synthesize→slide_book→report per event.
 
     keep_going=False (default) aborts the batch on the first failing stage (today's
@@ -252,18 +284,37 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False)
         print("--pipeline requires --event <id> or --all", file=sys.stderr)
         return 1
 
+    caller = _make_batch_caller() if batch else None     # None ⇒ degrade-to-today
+    if caller is not None:
+        from src import slide_book as sb_mod, transcribe as tr_mod, visual as vis_mod
+
     failures: list[tuple[str, str]] = []   # (event_id, stage) for --keep-going summary
     for k, evt in enumerate(targets, 1):
         print(f"\n========== event {k}/{len(targets)}: {evt} ==========", flush=True)
-        stages = [
-            ("ingest", lambda: ingest_cmd(evt, all_flag=False)),
-            ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
-            ("visual", lambda: visual_cmd(evt)),
-            ("align", lambda: align_cmd(evt)),
-            ("synthesize", lambda: synthesize_cmd(evt, max_sec=None)),
-            ("slide_book", lambda: slide_book_cmd(evt)),
-            ("report", lambda: report_cmd(evt)),
-        ]
+        if caller is None:
+            stages = [
+                ("ingest", lambda: ingest_cmd(evt, all_flag=False)),
+                ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
+                ("visual", lambda: visual_cmd(evt)),
+                ("align", lambda: align_cmd(evt)),
+                ("synthesize", lambda: synthesize_cmd(evt, max_sec=None)),
+                ("slide_book", lambda: slide_book_cmd(evt)),
+                ("report", lambda: report_cmd(evt)),
+            ]
+        else:
+            ev = evt   # bind per-iteration for the closures below
+            stages = [
+                ("ingest", lambda: ingest_cmd(ev, all_flag=False)),
+                ("transcribe", _staged(lambda c: tr_mod.batch_prefill_chunks(ev, c),
+                                       caller, lambda: transcribe_cmd(ev, max_sec=None))),
+                ("visual", _staged(lambda c: vis_mod.batch_prefill_captions(ev, c),
+                                   caller, lambda: visual_cmd(ev))),
+                ("align", lambda: align_cmd(ev)),
+                ("synthesize", lambda: synthesize_cmd(ev, max_sec=None)),
+                ("slide_book", _staged(lambda c: sb_mod.batch_prefill_slides(ev, c),
+                                       caller, lambda: slide_book_cmd(ev))),
+                ("report", lambda: report_cmd(ev)),
+            ]
         ok, failed = run_event_stages(evt, stages)
         if not ok:
             failures.append((evt, failed))
@@ -475,6 +526,9 @@ def main() -> int:
                         help="--validate-notes --strict: reject fabricated placeholders")
     parser.add_argument("--keep-going", action="store_true",
                         help="--pipeline --all: continue past a failed event instead of aborting")
+    parser.add_argument("--batch", action="store_true",
+                        help="--pipeline: bulk-fill ASR/visual/slide caches via Gemini Batch "
+                             "before each stage (off = today's synchronous calls)")
     args = parser.parse_args()
 
     if args.selftest:
@@ -498,7 +552,7 @@ def main() -> int:
     if args.validate_slides:
         return validate_slides_cmd(args.event)
     if args.pipeline:
-        return pipeline_cmd(args.event, args.all, args.keep_going)
+        return pipeline_cmd(args.event, args.all, args.keep_going, batch=args.batch)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:

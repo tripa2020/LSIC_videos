@@ -198,3 +198,18 @@ def test_resolve_file_job_downloads_and_parses():
 def test_resolve_no_dest_returns_empty():
     client = FakeClient(get_job=FakeJob(state="JOB_STATE_SUCCEEDED", dest=None))
     assert bg.resolve(client, "batches/job-1") == {}
+
+
+# --- response_text: shape-tolerant extraction (sync .text vs batch dict) ---
+
+@pytest.mark.parametrize("resp,expected", [
+    ("already text", "already text"),
+    (type("R", (), {"text": "attr text"})(), "attr text"),
+    ({"text": "dict text"}, "dict text"),
+    ({"candidates": [{"content": {"parts": [{"text": "a"}, {"text": "b"}]}}]}, "ab"),
+    (None, ""),
+    ({"unexpected": 1}, ""),
+    ({"candidates": []}, ""),
+])
+def test_response_text_handles_each_shape(resp, expected):
+    assert bg.response_text(resp) == expected

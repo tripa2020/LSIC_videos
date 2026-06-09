@@ -295,6 +295,56 @@ def transcribe(audio_path: Path, duration: float, workdir: Path,
     return segs
 
 
+def batch_prefill_chunks(event_id: str, caller, work_root: Path = WORK_ROOT) -> int:
+    """Batch-fill every uncached ASR chunk in one job; return #written.
+
+    Writes transcribe's own ``chunk_NNN.segments.json`` cache (R1) over the pre-split 10-min
+    chunks. The per-chunk timeline offset rides in the custom_id (``<cache>|<offset>``). A
+    dense chunk whose JSON is token-truncated fails to parse → it is left uncached and the
+    sync loop re-does it WITH the adaptive split (R4). Slicing/cap (M-C4) is not applied here
+    yet, so a later capped sync run simply fills any chunk this prefill didn't cover."""
+    from google.genai import types
+
+    from src.batch_gemini import response_text
+    from src.llm_caller import LLMRequest, prefill
+
+    event_workdir = work_root / "events" / event_id
+    ing = IngestResult.model_validate_json(
+        (event_workdir / util.STAGE_INGEST / "manifest.json").read_text())
+    if ing.audio_path is None:
+        return 0
+    transcript_dir = event_workdir / util.STAGE_TRANSCRIPT
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    chunks = GeminiTranscriber()._chunk_audio(Path(ing.audio_path), transcript_dir)
+    pending = [(cp, off) for (cp, off) in chunks
+               if not cp.with_suffix(".segments.json").exists()]
+
+    reqs = [LLMRequest(
+                custom_id=f"{cp.with_suffix('.segments.json')}|{off}",
+                model=GEMINI_MODEL,
+                contents=[ASR_PROMPT,
+                          types.Part.from_bytes(data=_to_opus_bytes(cp), mime_type="audio/ogg")],
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                    response_mime_type="application/json",
+                    response_schema=list[_AsrRow]))
+            for (cp, off) in pending]
+
+    def write_one(cid: str, resp) -> None:
+        cache_str, off_str = cid.rsplit("|", 1)
+        try:
+            rows = json.loads(response_text(resp) or "[]")
+        except json.JSONDecodeError:
+            return                       # dense/truncated chunk → leave to sync split (R4)
+        segs = _parse_segments(rows, float(off_str))
+        Path(cache_str).write_text(
+            json.dumps([s.model_dump(mode="json") for s in segs], indent=2))
+
+    return prefill(caller, reqs, write_one)
+
+
 def transcribe_one_event(event_id: str, max_sec: Optional[float] = None,
                          work_root: Path = WORK_ROOT) -> tuple[Path, list[Segment]]:
     event_workdir = work_root / "events" / event_id
