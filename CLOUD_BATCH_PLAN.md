@@ -166,7 +166,7 @@ LSIC_videos/
   yt-dlp, PyMuPDF), `pip install -r requirements.txt` (minus dead `anthropic`),
   entrypoint `python -m src.main`. *Gate:* local `docker run … --pipeline --event 618`
   produces a Report bundle; diff `notes.md` vs known-good local (container parity).
-- [ ] **M-C2 — GCP provisioning** (`infra/`) — VM + GCS bucket + service account scripts +
+- [x] **M-C2 — GCP provisioning** ✅ (scripts; you run on GCP) (`infra/`) — VM + GCS bucket + service account scripts +
   steps. *Gate (verify-first):* on the VM, confirm Gemini key tier (OQ1) + GCS write.
 - [x] **M-C3 — `src/topic_filter.py`** ✅ (129/122 pinned) — compute Energy∪ISRU event-id set; feed
   `group_manifest.build(event_ids)`. *Gate:* `/python-unit-tests` — set == 130/122,
@@ -183,7 +183,7 @@ LSIC_videos/
 
 ### PART 3 — Full processing  `<!-- progress: P3_FULL -->`
 
-- [ ] **M-F1 — `download_lsic/run_corpus.sh`** — `xargs -P $CONC` over the 122 video-bearing
+- [x] **M-F1 — `download_lsic/run_corpus.sh`** ✅ (built w/ Part 2) — `xargs -P $CONC` over the 122 video-bearing
   event ids, batch mode, per-event log + ✅/❌ summary, GCS `sync` of bundles, delete-after-
   process for transient video. *Gate:* dry-run on 3 events prints plan + cost estimate.
 - [ ] **M-F2 — full run** — 122 events, 4 h cap applied, `--dry-run` cost gate per event,
