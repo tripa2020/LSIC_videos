@@ -162,7 +162,7 @@ LSIC_videos/
 
 ### PART 2 — Cloud + Docker, 5 full events  `<!-- progress: P2_CLOUD_SLICE -->`
 
-- [ ] **M-C1 — `Dockerfile` + `.dockerignore`** — system deps (ffmpeg, libreoffice,
+- [x] **M-C1 — `Dockerfile` + `.dockerignore`** ✅ — system deps (ffmpeg, libreoffice,
   yt-dlp, PyMuPDF), `pip install -r requirements.txt` (minus dead `anthropic`),
   entrypoint `python -m src.main`. *Gate:* local `docker run … --pipeline --event 618`
   produces a Report bundle; diff `notes.md` vs known-good local (container parity).

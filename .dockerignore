@@ -1,0 +1,22 @@
+# Secrets — never ship into the image
+.env
+.env.*
+
+# Local data + artifacts (fetched/produced at run time on the VM)
+work/
+LSIC_Downloads/
+download_lsic/recon_artifacts/
+download_lsic/__pycache__/
+
+# Repo cruft not needed at runtime
+.git/
+.github/
+.claude/
+.venv/
+**/__pycache__/
+**/*.pyc
+.coverage
+tests/
+golden/
+*.md
+!download_lsic/*.md

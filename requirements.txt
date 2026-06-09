@@ -3,7 +3,6 @@ python-dotenv>=1.0
 
 # stage 2 onward — installed at M0 but not imported until later milestones
 google-genai>=0.5
-anthropic>=0.40
 python-pptx>=1.0
 PyMuPDF>=1.24       # replaces pdf2image+poppler — pure-pip, no system deps
 scenedetect>=0.6
