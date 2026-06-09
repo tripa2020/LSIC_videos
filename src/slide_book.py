@@ -141,14 +141,7 @@ def slide_book(event_id: str, work_root: Path = WORK_ROOT) -> tuple[Path, Path, 
         else:
             print(f"  [slide_book] slide {i}/{len(deck_slides)} "
                   f"{asset_id}#{slide_n}…", flush=True, end=" ")
-            try:
-                d = _vlm_curate(describer, png_path)
-                print(f"ok ({d.get('kind', '?')})")
-            except Exception as e:
-                print(f"FAILED: {e}")
-                d = {"is_informative": False, "topic": "", "commentary": "",
-                     "contains_equation": False, "kind": "text-only"}
-            cache_path.write_text(json.dumps(d, indent=2))
+            d = _curate_slide(describer, png_path, cache_path)
         curated.append(CuratedSlide(
             asset_id=asset_id, slide_n=slide_n, png_path=png_path,
             is_informative=bool(d.get("is_informative", False)),
@@ -225,6 +218,26 @@ def _load_all_deck_slides(decks_dir: Path) -> list[tuple[str, int, Path]]:
                 continue
             out.append((d.name, n, png))
     return out
+
+
+# Stub used for a slide whose VLM call failed THIS run — never cached (so a rerun retries).
+_FAILED_SLIDE_STUB = {"is_informative": False, "topic": "", "commentary": "",
+                      "contains_equation": False, "kind": "text-only"}
+
+
+def _curate_slide(describer: GeminiDescriber, png_path: Path, cache_path: Path) -> dict:
+    """Curate one slide, caching ONLY on success. A VLM failure (e.g. a 503 capacity spike)
+    returns a stub for this run but is **not** written to cache — so a later rerun retries the
+    slide instead of locking in the drop (R4, matching the batch path). Pre-fix behavior cached
+    the failure, silently dropping the slide forever; at 122-event scale that lost real slides."""
+    try:
+        d = _vlm_curate(describer, png_path)
+        print(f"ok ({d.get('kind', '?')})")
+        cache_path.write_text(json.dumps(d, indent=2))
+        return d
+    except Exception as e:
+        print(f"FAILED: {e}")
+        return dict(_FAILED_SLIDE_STUB)
 
 
 def _vlm_curate(describer: GeminiDescriber, png_path: Path) -> dict:
