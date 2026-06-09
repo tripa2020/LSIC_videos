@@ -1,0 +1,8 @@
+# Batch 1 — Energy ∪ ISRU validation slice (5 events).
+# Catalog event_id | pipeline lsic_id | description. Rebuild events.json with:
+#   python -m src.group_manifest $(grep -v '^#' download_lsic/batch1_slice.txt | awk '{print $1}')
+63600025  lsic_2026-04-09  Surface Power April 2026 Telecon (DeMattia) — 1 video + decks
+657       lsic_2026-01-29  Surface Power Jan 2026 Telecon (Zormpas) — 1 video + decks
+638       lsic_2025-09-25  Surface Power Sept 2025 Workshop — 7 videos (heavy)
+618       lsic_2025-07-24  Surface Power July 2025 Telecon (Cadogan/Hunt) — 1 video + decks
+624       lsic_2025-07-16  ISRU July 2025 Workshop (Miller) — 3 videos
