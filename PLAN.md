@@ -544,7 +544,7 @@ level a future agent can execute against without re-deriving design choices.
 | 9    | `synthesize.py` (M2.5 thin → M5 full) | transcribe (M2.5); align (M5) | M2.5: single Claude call → notes.md. M5: per-section calls + Evidence-grounded citations + Through 5 Lenses block. |
 | 10   | `visual.py`    | ingest, transcribe (for audio-cue trigger) | **Hybrid sampling**: scene + 60s safety + slide-text-delta + audio-cue. Gemini VLM per kept frame. |
 | 11   | `align.py`     | transcribe, visual, handlers | Sectioning + TF-IDF deck match. **Emits `evidence.json`** alongside `aligned.json`. |
-| 12   | `main.py`      | all above     | CLI flags: `--selftest`, `--discover`, `--ingest`, `--transcribe`, `--synthesize`, `--visual`, `--align`, `--validate-*`, `--dry-run`, `--strict`. |
+| 12   | `main.py`      | all above     | CLI flags: `--selftest`, `--discover`, `--ingest`, `--transcribe`, `--synthesize`, `--visual`, `--align`, `--slide-book`, `--report`, `--pipeline` (+`--keep-going` for resilient `--all`), `--status` (per-event stage matrix), `--validate-*`, `--strict`. |
 
 ### Module-by-module: what each file owns
 

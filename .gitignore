@@ -17,3 +17,9 @@ clai/
 # IDE
 .idea/
 .vscode/
+
+# scratch scrape (regenerable via download_lsic/harvest.py)
+download_lsic/recon_artifacts/
+
+# workspace agent tooling (skills/hooks/archive/personal config) — not project code
+.claude/
