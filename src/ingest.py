@@ -40,7 +40,26 @@ def _video_sort_key(asset: Asset) -> tuple:
     return (order, asset.lsic_id if asset.lsic_id is not None else 1 << 30, _video_key(asset))
 
 
-def ingest_event(event: Event, work_root: Path = WORK_ROOT) -> IngestResult:
+# Default aggregate-video cap for the cloud batch: bound a multi-video Meeting so one event
+# can't dominate cost/time. None at the ingest_event default = no cap (degrade-to-today).
+AGGREGATE_VIDEO_CAP_SEC = 14400.0      # 4 h
+
+
+def _within_cap(offset: float, dur: float, max_total_sec: float | None,
+                have_parts: bool) -> bool:
+    """Should the next video be included under the aggregate cap (R3)? Pure.
+
+    ``offset`` = cumulative duration so far, ``dur`` = this video's length. None cap → always
+    include (degrade-to-today). The first video is always included even if it alone exceeds the
+    cap (never produce a zero-video event); after that, include only while the running total
+    stays within the cap — so the bounded manifest's spine is ≤ cap at a whole-video boundary."""
+    if max_total_sec is None or not have_parts:
+        return True
+    return offset + dur <= max_total_sec
+
+
+def ingest_event(event: Event, work_root: Path = WORK_ROOT,
+                 max_total_sec: float | None = None) -> IngestResult:
     workdir = work_root / "events" / event.event_id
     ingest_dir = workdir / util.STAGE_INGEST
     ingest_dir.mkdir(parents=True, exist_ok=True)
@@ -56,9 +75,13 @@ def ingest_event(event: Event, work_root: Path = WORK_ROOT) -> IngestResult:
         key = _video_key(asset)
         try:
             local = _resolve_video(asset, ingest_dir / "videos" / f"{key}.mp4")
+            dur, fps, w, h = _ffprobe(local)
+            if not _within_cap(offset, dur, max_total_sec, bool(parts)):
+                print(f"  [ingest] aggregate cap {max_total_sec:.0f}s reached at {offset:.0f}s "
+                      f"({len(parts)} videos) — dropping {key} and the rest", flush=True)
+                break
             part_wav = ingest_dir / "audio_parts" / f"{key}.wav"
             _ffmpeg_extract_wav(local, part_wav)
-            dur, fps, w, h = _ffprobe(local)
         except Exception as e:
             # Dead/unavailable video (deleted, private, geo-blocked). Skip it
             # rather than crash the event; align drops its orphaned t= windows.
@@ -213,7 +236,8 @@ def load_events_json(work_root: Path = WORK_ROOT) -> tuple[list[Event], list[Ass
     return events, papers
 
 
-def ingest_one_event(event_id: str, work_root: Path = WORK_ROOT) -> IngestResult:
+def ingest_one_event(event_id: str, work_root: Path = WORK_ROOT,
+                     max_total_sec: float | None = None) -> IngestResult:
     events, _ = load_events_json(work_root)
     target = next((e for e in events if e.event_id == event_id), None)
     if target is None:
@@ -221,7 +245,7 @@ def ingest_one_event(event_id: str, work_root: Path = WORK_ROOT) -> IngestResult
             f"event_id '{event_id}' not in events.json — "
             f"known: {sorted(e.event_id for e in events)}"
         )
-    return ingest_event(target, work_root)
+    return ingest_event(target, work_root, max_total_sec=max_total_sec)
 
 
 def load_ingest_result(event_id: str, work_root: Path = WORK_ROOT) -> IngestResult:

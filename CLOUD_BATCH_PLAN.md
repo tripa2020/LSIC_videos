@@ -34,7 +34,7 @@ PART 1  Batch code (untested)  ──►  PART 2  Cloud+Docker, 5 full events  �
 | ----------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | Decomposition                 | 3 sequential parts (code → slice → full)                                     | Part 1 is untested = highest risk; prove on fakes before cloud spend                                                                               | 2026-06-09 |
 | Filter                        | `topics ⊇ {Surface Power} ∪ {In Situ Resource Utilization}`                  | Deterministic from catalog; no keyword guessing                                                                                                    | 2026-06-09 |
-| Filter source                 | `selected_manifest.json` (181 events)                                        | Reproduces 130 events / **122 with video** exactly                                                                                                 | 2026-06-09 |
+| Filter source                 | `selected_manifest.json` (181 events)                                        | Reproduces **129 events / 122 with video** exactly (verified by topic_filter, M-C3)                                                                 | 2026-06-09 |
 | Cloud target                  | GCP VM + GCS + service account                                               | Gemini co-location: auth, egress, quota; GCP billing ready                                                                                         | 2026-06-09 |
 | LLM batch backend             | **Single Gemini Batch API**                                                  | All 4 LLM stages are Gemini; Anthropic is dead code → drop it                                                                                      | 2026-06-09 |
 | Batch topology                | Per-stage batch jobs, `align` local between                                  | Stages sequential per event; work fans out within a stage                                                                                          | 2026-06-09 |
@@ -171,7 +171,7 @@ LSIC_videos/
 - [x] **M-C3 — `src/topic_filter.py`** ✅ (129/122 pinned) — compute Energy∪ISRU event-id set; feed
   `group_manifest.build(event_ids)`. *Gate:* `/python-unit-tests` — set == 130/122,
   deterministic; log the 130-vs-129 delta (OQ4).
-- [ ] **M-C4 — 4 h aggregate cap, once at ingest** (`ingest.py`, R3) — sum video durations
+- [x] **M-C4 — 4 h aggregate cap, once at ingest** ✅ (`ingest.py`, R3) — sum video durations
   per event; emit a **bounded manifest** whose concat spine `duration_sec ≤ 14400`. Every
   downstream stage (transcribe, visual, synth, slide_book) reads the bounded manifest and is
   auto-capped — **no stage knows the number**. *Gate:* `/python-unit-tests` — bounded

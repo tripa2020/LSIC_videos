@@ -165,13 +165,14 @@ def discover_cmd(folder: Path) -> int:
     return 0
 
 
-def ingest_cmd(event_id: str | None, all_flag: bool) -> int:
+def ingest_cmd(event_id: str | None, all_flag: bool,
+               cap_sec: float | None = None) -> int:
     from src import ingest as ingest_mod
     if all_flag:
         summary = ingest_mod.ingest_all()
         print(f"[ingest] {summary['events']} events + {summary['papers']} papers OK")
     elif event_id:
-        result = ingest_mod.ingest_one_event(event_id)
+        result = ingest_mod.ingest_one_event(event_id, max_total_sec=cap_sec)
         print(f"[ingest] {result.event_id} → {result.workdir}")
         if result.audio_path:
             print(f"         audio: {result.audio_path} ({result.duration_sec:.0f} s)")
@@ -253,7 +254,7 @@ def _staged(prefill_fn, caller, cmd):
 
 
 def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
-                 batch: bool = False) -> int:
+                 batch: bool = False, cap_sec: float | None = None) -> int:
     """Chain ingest→transcribe→visual→align→synthesize→slide_book→report per event.
 
     keep_going=False (default) aborts the batch on the first failing stage (today's
@@ -293,7 +294,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
         print(f"\n========== event {k}/{len(targets)}: {evt} ==========", flush=True)
         if caller is None:
             stages = [
-                ("ingest", lambda: ingest_cmd(evt, all_flag=False)),
+                ("ingest", lambda: ingest_cmd(evt, all_flag=False, cap_sec=cap_sec)),
                 ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
                 ("visual", lambda: visual_cmd(evt)),
                 ("align", lambda: align_cmd(evt)),
@@ -304,7 +305,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
         else:
             ev = evt   # bind per-iteration for the closures below
             stages = [
-                ("ingest", lambda: ingest_cmd(ev, all_flag=False)),
+                ("ingest", lambda: ingest_cmd(ev, all_flag=False, cap_sec=cap_sec)),
                 ("transcribe", _staged(lambda c: tr_mod.batch_prefill_chunks(ev, c),
                                        caller, lambda: transcribe_cmd(ev, max_sec=None))),
                 ("visual", _staged(lambda c: vis_mod.batch_prefill_captions(ev, c),
@@ -529,14 +530,17 @@ def main() -> int:
     parser.add_argument("--batch", action="store_true",
                         help="--pipeline: bulk-fill ASR/visual/slide caches via Gemini Batch "
                              "before each stage (off = today's synchronous calls)")
+    parser.add_argument("--cap-video-hours", type=float, default=None, metavar="H",
+                        help="aggregate-video cap per event (e.g. 4 = 4h); unset = no cap")
     args = parser.parse_args()
+    cap_sec = args.cap_video_hours * 3600.0 if args.cap_video_hours else None
 
     if args.selftest:
         return selftest()
     if args.discover:
         return discover_cmd(args.folder)
     if args.ingest:
-        return ingest_cmd(args.event, args.all)
+        return ingest_cmd(args.event, args.all, cap_sec=cap_sec)
     if args.transcribe:
         return transcribe_cmd(args.event, args.max_sec)
     if args.visual:
@@ -552,7 +556,8 @@ def main() -> int:
     if args.validate_slides:
         return validate_slides_cmd(args.event)
     if args.pipeline:
-        return pipeline_cmd(args.event, args.all, args.keep_going, batch=args.batch)
+        return pipeline_cmd(args.event, args.all, args.keep_going, batch=args.batch,
+                            cap_sec=cap_sec)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.validate_notes:
