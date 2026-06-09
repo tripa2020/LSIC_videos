@@ -1,10 +1,11 @@
 """Final stage: assemble the reader-facing Report/ folder for an event.
 
-Copies the deliverables (notes.md, slides.pdf, slide_captions.md) from the
-05_briefing/ staging folder into work/events/<event_id>/Report/ — a clean,
-self-contained deliverable folder (no manifests, no intermediate artifacts,
-no equations.md). Copy (not move): the staged 05_briefing artifacts stay put
-so stage caching/resume keeps working.
+Copies the deliverables (notes.md, slides.pdf, slide_captions.md, equations.md)
+from the 05_briefing/ staging folder into work/events/<event_id>/Report/ — a
+clean, self-contained deliverable folder (no manifests, no intermediate
+artifacts). Copy (not move): the staged 05_briefing artifacts stay put so stage
+caching/resume keeps working. A deliverable absent in 05_briefing is reported as
+missing, never fatal (degrade-to-today).
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ from pathlib import Path
 from src import util
 
 WORK_ROOT = Path("work")
-REPORT_FILES = ["notes.md", "slides.pdf", "slide_captions.md"]
+# equations.md promoted into Report/ per the cloud-batch output contract ("Report + equations").
+REPORT_FILES = ["notes.md", "slides.pdf", "slide_captions.md", "equations.md"]
 
 
 def assemble_report(event_id: str, work_root: Path = WORK_ROOT) -> Path:
