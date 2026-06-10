@@ -55,9 +55,18 @@ EVTS=$("$PY" -c "import json; print('\n'.join(e['event_id'] for e in json.load(o
 # --- 4. run the pipeline per event (isolated → safe to parallelize) ---
 mkdir -p logs
 run_one() {
-  local evt="$1"
-  if "$PY" -m src.main --pipeline --event "$evt" --keep-going \
-        --cap-video-hours "$CAP_HOURS" $EXTRA > "logs/${evt}.log" 2>&1; then
+  local evt="$1" rc
+  echo "===== $evt =====" >&2
+  if [ -n "${VERBOSE:-}" ]; then          # VERBOSE=1 → stream live to terminal AND log
+    "$PY" -m src.main --pipeline --event "$evt" --keep-going \
+        --cap-video-hours "$CAP_HOURS" $EXTRA 2>&1 | tee "logs/${evt}.log"
+    rc=${PIPESTATUS[0]}
+  else                                     # default → quiet to log file (good for -P parallel)
+    "$PY" -m src.main --pipeline --event "$evt" --keep-going \
+        --cap-video-hours "$CAP_HOURS" $EXTRA > "logs/${evt}.log" 2>&1
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
     echo "✅ $evt"
     [ -n "$GCS_BUCKET" ] && gsutil -m rsync -r "work/events/${evt}/Report" \
         "${GCS_BUCKET}/${evt}/Report" >/dev/null 2>&1
