@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,3 +168,27 @@ def is_transient(e: Exception) -> bool:
     connection, or DNS blip). Single source of truth across all API stages."""
     msg = str(e)
     return any(k in msg for k in _TRANSIENT_MARKERS)
+
+
+def retry_transient(fn, *, attempts: int = 5, base_delay: float = 5.0,
+                    sleep=None):
+    """Call ``fn()`` and return its result; on a transient error (``is_transient``)
+    retry up to ``attempts`` times with linear backoff ``base_delay*(n+1)`` seconds.
+
+    The shared retry *policy* companion to ``is_transient`` — one place, every stage.
+    Non-transient errors propagate immediately. The last transient error re-raises
+    once ``attempts`` is exhausted. ``sleep`` is injectable (defaults to ``time.sleep``,
+    resolved at call time so tests can monkeypatch ``util.time.sleep``) — no real wait.
+
+    Degrade-to-today: ``fn`` that succeeds first call returns with **zero** added
+    latency and no sleep — byte-identical to a bare ``fn()``.
+    """
+    _sleep = sleep if sleep is not None else time.sleep
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 — classifier decides retry vs raise
+            if is_transient(e) and attempt < attempts - 1:
+                _sleep(base_delay * (attempt + 1))
+                continue
+            raise

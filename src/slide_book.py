@@ -241,10 +241,17 @@ def _curate_slide(describer: GeminiDescriber, png_path: Path, cache_path: Path) 
 
 
 def _vlm_curate(describer: GeminiDescriber, png_path: Path) -> dict:
-    """One Gemini VLM call per slide. Returns the curated dict."""
+    """One Gemini VLM call per slide. Returns the curated dict.
+
+    Image (multimodal) requests hit Gemini's more-contended image capacity, which
+    returns intermittent 503s (~8% measured) even while text calls are clean — so the
+    call is wrapped in the shared ``retry_transient`` policy (the only retry synth
+    already had and this stage lacked). Only the network call retries; the JSON parse
+    stays outside, so a malformed-but-200 response is not retried (unchanged behavior).
+    """
     from google.genai import types
     img_bytes = png_path.read_bytes()
-    resp = describer.client.models.generate_content(
+    resp = util.retry_transient(lambda: describer.client.models.generate_content(
         model=describer.model,
         contents=[
             VLM_PROMPT,
@@ -254,7 +261,7 @@ def _vlm_curate(describer: GeminiDescriber, png_path: Path) -> dict:
             temperature=0.0,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
-    )
+    ))
     return json.loads(util.strip_fences(resp.text or ""))
 
 
