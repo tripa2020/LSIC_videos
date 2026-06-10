@@ -9,7 +9,8 @@ PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-us-central1-a}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-8}"   # 8 vCPU, no GPU — pipeline is I/O+API bound
 SPOT="${SPOT:-true}"                            # Spot ≈ 70% cheaper; pipeline is resumable
-DISK_GB="${DISK_GB:-512}"                       # transient videos live here, deleted as processed
+DISK_GB="${DISK_GB:-100}"                       # transient videos (deleted as processed); 100 GB
+                                                # stays under a fresh project's 500 GB SSD quota
 VM="${VM:-lsic-batch}"
 BUCKET="${BUCKET:-gs://${PROJECT}-lsic-reports}"
 SA="${SA:-lsic-batch-sa}"
