@@ -25,7 +25,14 @@ gcloud iam service-accounts describe "${SA}@${PROJECT}.iam.gserviceaccount.com" 
   || gcloud iam service-accounts create "$SA" --display-name="LSIC batch"
 gsutil iam ch "serviceAccount:${SA}@${PROJECT}.iam.gserviceaccount.com:roles/storage.objectAdmin" "$BUCKET"
 
-# --- 3. the VM (Ubuntu + Docker via startup script) ---
+# --- 3. firewall: allow IAP SSH (VMs here have no external IP → gcloud tunnels via IAP,
+#        which needs port 22 open to Google's IAP range 35.235.240.0/20) ---
+gcloud compute firewall-rules describe allow-iap-ssh >/dev/null 2>&1 || \
+gcloud compute firewall-rules create allow-iap-ssh \
+  --network=default --direction=INGRESS --action=ALLOW \
+  --rules=tcp:22 --source-ranges=35.235.240.0/20
+
+# --- 4. the VM (Ubuntu + Docker via startup script) ---
 SPOT_FLAGS=""
 [ "$SPOT" = "true" ] && SPOT_FLAGS="--provisioning-model=SPOT --instance-termination-action=STOP"
 gcloud compute instances describe "$VM" --zone="$ZONE" >/dev/null 2>&1 || \
