@@ -6,6 +6,7 @@ google-genai>=0.5
 python-pptx>=1.0
 PyMuPDF>=1.24       # replaces pdf2image+poppler — pure-pip, no system deps
 reportlab>=4.0      # slide_book._render_pdf — pure-pip PDF generation (was an undeclared dep)
+PyYAML>=6.0         # validators._parse_frontmatter — required for notes frontmatter validation
 scenedetect>=0.6
 opencv-python>=4.10
 imagehash>=4.3

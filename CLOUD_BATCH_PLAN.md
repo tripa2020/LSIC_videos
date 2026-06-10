@@ -178,16 +178,25 @@ LSIC_videos/
   downstream stage (transcribe, visual, synth, slide_book) reads the bounded manifest and is
   auto-capped — **no stage knows the number**. *Gate:* `/python-unit-tests` — bounded
   manifest duration ≤ 14400; under-cap event unaffected (degrade-to-today).
-- [ ] **M-C5 — slice run** — the 5 full events (`63600025`, `lsic_2026-01-29`, `638`,
-  `618`, `624`) → **full Report bundle each** via batch. **Gate (binary):** 5/5 bundles
-  pass `validate_notes` + `validate_slides` + `equations.md` present; record wall-clock + $
-  per event (feeds the Part-3 cap/ceiling).
+- [x] **M-C5 — slice run** ✅ — 5 full events → **full Report bundle each** (sync path, not batch).
+  **Gate (binary) MET 2026-06-10:** 5/5 bundles pass `validate_notes` + `validate_slides` +
+  `equations.md` present, all synced to GCS. Actual events resolved by the `slice` target were
+  `lsic_2025-07-16`, `lsic_2025-07-24`, `lsic_2025-09-25`, `lsic_2026-01-29`, `lsic_2026-04-09`
+  (the planning-time id list above was illustrative). Run on the **native non-batch path**
+  (`run_corpus.sh slice`, sync caller); the `--batch` path is exercised at M-F2.
+  **Caveats (see Known Failures):** the corpus driver silently dropped 1 event (completed via
+  direct `src.main` invocation); `reportlab` + `PyYAML` were undeclared deps (now pinned).
+  Per-event wall-clock ≈ 33 min for a fresh 71-min/4K event (ingest+transcribe dominate).
+  <!-- progress: P2_CLOUD_SLICE done (5/5 valid, 2026-06-10) -->
 
 ### PART 3 — Full processing  `<!-- progress: P3_FULL -->`
 
 - [x] **M-F1 — `download_lsic/run_corpus.sh`** ✅ (built w/ Part 2) — `xargs -P $CONC` over the 122 video-bearing
   event ids, batch mode, per-event log + ✅/❌ summary, GCS `sync` of bundles, delete-after-
   process for transient video. *Gate:* dry-run on 3 events prints plan + cost estimate.
+  ⚠️ **REGRESSION found at M-C5 (2026-06-10):** the loop silently dropped 1 of 5 events (no log,
+  never invoked). Must root-cause the `xargs -P` early-exit (suspected 255-exit abort) **before
+  M-F2**, or the 122-run will silently under-process. See Known Failures.
 - [ ] **M-F2 — full run** — 122 events, 4 h cap applied, `--dry-run` cost gate per event,
   stop on $ ceiling (OQ3). **Gate (binary):** GCS `notes.md` count == expected (≤122);
   spot-check 3 bundles valid; tally spend ≤ ceiling; sync-back populates local `Report/`.
@@ -270,6 +279,9 @@ _Populated from the first cloud debug session (2026-06-10, slice run M-C5)._
 | VM dies mid-run every ~2 min                   | Spot/preemptible instance reclaimed by GCP (3× in one afternoon); `us-central1-a` e2-standard-8 Spot was uncontendable                                       | Converted to **STANDARD** provisioning — recreate reusing the boot disk; cache + `.env` preserved | 2026-06-10 |
 | `slide_book` silently drops ~3 slides/event    | Image/multimodal requests hit a contended Gemini pool returning ~8% transient 503s (text calls clean); `_vlm_curate` was the only LLM call **without retry**, and the stage-resume gate then locks the loss in | Added shared `util.retry_transient` (companion to `is_transient`); wrapped the VLM call (`d648dbe`) | 2026-06-10 |
 | `synth` failed all 5 events on the first run   | Transient Gemini **Pro** 503 capacity window; cleared on its own minutes later                                                                              | None needed — synth's existing 5× linear backoff rides it out (verified by re-run)              | 2026-06-10 |
+| `slide_book` crashed at stage 6 (`No module named 'reportlab'`) AFTER captioning succeeded | `reportlab` (used by `_render_pdf`) was never in `requirements.txt`; native `pip install -r` missed it | Declared `reportlab>=4.0` in `requirements.txt` (`42b061a`); installed on VM                     | 2026-06-10 |
+| `validate_notes` FAILed all 5 (`frontmatter_parses`) even with valid `---` frontmatter | `validators._parse_frontmatter` soft-imports PyYAML; absent PyYAML → `except` returns `None` → false fail. PyYAML was undeclared | Declared `PyYAML>=6.0`; installed on VM (now a hard dep for the validation gate)                 | 2026-06-10 |
+| `run_corpus.sh` silently **dropped 1 of 5 events** (no log, never invoked) | Corpus driver loop skipped the last event — suspected `xargs -P` aborting on a 255 exit; not yet root-caused | **OPEN — blocks M-F2.** Worked around via direct `src.main --event`; must fix before the 122-run | 2026-06-10 |
 
 ### LLM instructions to reproduce this plan
 
