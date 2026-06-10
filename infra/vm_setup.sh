@@ -15,5 +15,6 @@ python3 -m venv .venv
 
 echo
 echo "✅ VM ready. Next:"
-echo "   echo 'GEMINI_API_KEY=<your key>' > .env"
-echo "   VERBOSE=1 CONC=1 GCS_BUCKET=gs://<bucket> ./download_lsic/run_corpus.sh slice"
+echo "   echo 'GEMINI_API_KEY=<your key>' > .env   # paste the real AI Studio key (AIza… or AQ.… ~53ch)"
+echo "   PY=./.venv/bin/python VERBOSE=1 CONC=1 GCS_BUCKET=gs://<bucket> ./download_lsic/run_corpus.sh slice"
+echo "   #  ^^ PY=./.venv/bin/python is REQUIRED (Ubuntu has no bare 'python'; omitting it silently no-ops)"

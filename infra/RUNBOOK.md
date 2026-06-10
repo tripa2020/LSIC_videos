@@ -38,9 +38,11 @@ echo 'GEMINI_API_KEY=<your key>' > .env
 ## D. Run the 5-event slice — LIVE (VERBOSE), sync = same output as local
 
 ```bash
-VERBOSE=1 CONC=1 GCS_BUCKET=$BUCKET ./download_lsic/run_corpus.sh slice
+PY=./.venv/bin/python VERBOSE=1 CONC=1 GCS_BUCKET=$BUCKET ./download_lsic/run_corpus.sh slice
 ```
-Every stage streams to your terminal (`ingest → transcribe → visual → align → synth → slide_book → report`) and is also saved to `logs/<event>.log`. Five `✅`/`❌` lines at the end; each `Report/` syncs to GCS.
+**`PY=./.venv/bin/python` is required** on the native VM: `run_corpus.sh` defaults to bare
+`python`, which Ubuntu doesn't provide (only `python3` + the venv) — omit it and the run
+silently no-ops (`python: command not found`, swallowed by the per-event loop). Every stage streams to your terminal (`ingest → transcribe → visual → align → synth → slide_book → report`) and is also saved to `logs/<event>.log`. Five `✅`/`❌` lines at the end; each `Report/` syncs to GCS.
 
 ## E. Visibility while it runs (and after)
 
@@ -66,7 +68,7 @@ gsutil -m rsync -r $BUCKET ./cloud_reports
 ## H. Later — full 122 (Gemini Batch, after batch ≡ sync is confirmed on one event)
 
 ```bash
-EXTRA=--batch CONC=4 GCS_BUCKET=$BUCKET ./download_lsic/run_corpus.sh filter
+PY=./.venv/bin/python EXTRA=--batch CONC=4 GCS_BUCKET=$BUCKET ./download_lsic/run_corpus.sh filter
 ```
 
 ---
