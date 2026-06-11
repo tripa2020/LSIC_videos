@@ -19,7 +19,8 @@ WORK_ROOT = Path("work")
 REPORT_FILES = ["notes.md", "slides.pdf", "slide_captions.md", "equations.md"]
 
 
-def assemble_report(event_id: str, work_root: Path = WORK_ROOT) -> Path:
+def assemble_report(event_id: str, work_root: Path = WORK_ROOT,
+                    dest_dir: Path | None = None) -> Path:
     src_dir = work_root / "events" / event_id / util.STAGE_BRIEFING
     dst_dir = work_root / "events" / event_id / "Report"
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -38,4 +39,14 @@ def assemble_report(event_id: str, work_root: Path = WORK_ROOT) -> Path:
     if missing:
         msg += f"  (missing in 05_briefing: {missing})"
     print(msg, flush=True)
+
+    # Optional ad-hoc delivery: also copy the in-tree bundle to a user folder (--out). Absent
+    # dest_dir, behavior is byte-identical to before. Self-copy (dest == Report/) is a no-op.
+    if dest_dir is not None:
+        dest = Path(dest_dir).expanduser().resolve()
+        if dest != dst_dir.resolve():
+            dest.mkdir(parents=True, exist_ok=True)
+            for name in copied:
+                shutil.copy2(dst_dir / name, dest / name)
+            print(f"  [report] {event_id}: bundle → {dest}", flush=True)
     return dst_dir

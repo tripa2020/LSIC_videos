@@ -19,6 +19,7 @@ SRC_MODULES = [
     "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
     "src.slide_book", "src.report", "src.status", "src.pptx_handler", "src.pdf_handler",
+    "src.adhoc",
 ]
 
 
@@ -510,6 +511,8 @@ def main() -> int:
                    help="Chain ingest→transcribe→visual→align→synthesize→slide_book (use --event or --all)")
     g.add_argument("--synthesize", action="store_true",
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
+    g.add_argument("--source", type=str, default=None, metavar="URL|PATH",
+                   help="ad-hoc: a YouTube URL or local video file → full pipeline → Report/")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
                    help="run validate_notes on a notes.md file")
     g.add_argument("--validate-ingest", action="store_true",
@@ -532,6 +535,10 @@ def main() -> int:
                              "before each stage (off = today's synchronous calls)")
     parser.add_argument("--cap-video-hours", type=float, default=None, metavar="H",
                         help="aggregate-video cap per event (e.g. 4 = 4h); unset = no cap")
+    parser.add_argument("--out", type=Path, default=None, metavar="DIR",
+                        help="--source: also copy the finished Report/ bundle to this folder")
+    parser.add_argument("--profile", type=str, default=None,
+                        help="--source: notes template profile (briefing|lecture; M2 hook)")
     args = parser.parse_args()
     cap_sec = args.cap_video_hours * 3600.0 if args.cap_video_hours else None
 
@@ -560,6 +567,9 @@ def main() -> int:
                             cap_sec=cap_sec)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
+    if args.source:
+        from src import adhoc
+        return adhoc.run_adhoc(args.source, out=args.out, profile=args.profile)
     if args.validate_notes:
         return validate_notes_cmd(args.validate_notes, args.strict)
     if args.validate_ingest:
