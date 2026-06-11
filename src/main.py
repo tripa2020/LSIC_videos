@@ -19,7 +19,7 @@ SRC_MODULES = [
     "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
     "src.slide_book", "src.report", "src.status", "src.pptx_handler", "src.pdf_handler",
-    "src.adhoc", "src.profiles", "src.profiles.lecture", "src.enrich_citations",
+    "src.adhoc", "src.profiles", "src.profiles.lecture", "src.enrich_citations", "src.remote",
 ]
 
 
@@ -560,6 +560,10 @@ def main() -> int:
     parser.add_argument("--references", action="store_true",
                         help="--pipeline: also run related-paper enrichment (off by default; "
                              "on automatically for --source)")
+    parser.add_argument("--remote", action="store_true",
+                        help="--source: run the job on the on-demand VM (start→run→scp back→auto-stop)")
+    parser.add_argument("--keep-up", action="store_true",
+                        help="--source --remote: leave the VM running after the job (skip auto-stop)")
     args = parser.parse_args()
     cap_sec = args.cap_video_hours * 3600.0 if args.cap_video_hours else None
 
@@ -591,6 +595,10 @@ def main() -> int:
     if args.enrich:
         return enrich_cmd(args.event)
     if args.source:
+        if args.remote:
+            from src import remote
+            return remote.remote_run(args.source, out=args.out, profile=args.profile,
+                                     keep_up=args.keep_up)
         from src import adhoc
         return adhoc.run_adhoc(args.source, out=args.out, profile=args.profile)
     if args.validate_notes:
