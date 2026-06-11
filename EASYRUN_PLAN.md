@@ -108,6 +108,24 @@ python -m src.main --source "https://youtu.be/<id>" --remote --out /tmp/rep2    
 python -m pytest tests/ -q && python -m src.main --selftest                            # 111 green, golden unchanged
 ```
 
+## Next iteration — design notes (NOT yet built; discussion in progress)
+
+### N1 — Claim Verification (citation purpose B: corroborate predictions)
+_Reframes citations from "related arXiv work" to "do the speaker's forward-looking claims hold
+up?" — which doubles as a **speaker-credibility signal** (how corroborated are their bets)._
+
+| Knob | Decision (2026-06-11) |
+|------|------------------------|
+| **Trigger** | predictive claims only — **predictions, forecasts, projections, guesses** (route on claim *type*, which `thematic.json` already separates: `industry_outlook`, `field_implications`, predictive `notable_claims`). NOT every claim. |
+| **Source** | ML/Robotics-heavy → **arXiv + Semantic Scholar + other reputable scholarly APIs**; for non-paper predictions, reputable web/analyst sources behind the same `SearchClient` seam. |
+| **Query** | **agentic** — spawn a sub-agent per claim to formulate queries, run searches, read results (not a single keyword string). |
+| **Surface** | gather **multiple** sources per claim and **compare stances** — do they agree or differ (support / contradict / mixed / no-evidence) → renders as a mini "state of the debate" + a corroboration score. |
+
+### N1-adjacent open discussion (not yet decided)
+- **D0 — verbosity:** make Open Questions, Takeaways, Field Implications more substantive (prefer richer *structure* per item over longer prose — see chat).
+- **D1 — coverage measurement:** how to quantify "did the briefing miss important detail?" (atomic-claim recall · segment/chapter coverage uniformity · completeness-critic pass · QA-coverage · groundedness rate — see chat).
+- **D2 — compute tiering:** where to spend stronger models / test-time compute. Working hypothesis: **synthesize** is the leverage point (already `gemini-2.5-pro`); the bigger lever is a **critique→revise pass** (= D1's critic), not a bigger base model. Perception stages (transcribe/visual) stay on flash.
+
 ## Footer
 
 ### Known Failures
