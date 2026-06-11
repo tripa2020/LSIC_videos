@@ -19,7 +19,7 @@ SRC_MODULES = [
     "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
     "src.slide_book", "src.report", "src.status", "src.pptx_handler", "src.pdf_handler",
-    "src.adhoc",
+    "src.adhoc", "src.profiles", "src.profiles.lecture",
 ]
 
 
@@ -255,7 +255,8 @@ def _staged(prefill_fn, caller, cmd):
 
 
 def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
-                 batch: bool = False, cap_sec: float | None = None) -> int:
+                 batch: bool = False, cap_sec: float | None = None,
+                 profile: str | None = None) -> int:
     """Chain ingest→transcribe→visual→align→synthesize→slide_book→report per event.
 
     keep_going=False (default) aborts the batch on the first failing stage (today's
@@ -299,7 +300,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
                 ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
                 ("visual", lambda: visual_cmd(evt)),
                 ("align", lambda: align_cmd(evt)),
-                ("synthesize", lambda: synthesize_cmd(evt, max_sec=None)),
+                ("synthesize", lambda: synthesize_cmd(evt, max_sec=None, profile=profile)),
                 ("slide_book", lambda: slide_book_cmd(evt)),
                 ("report", lambda: report_cmd(evt)),
             ]
@@ -312,7 +313,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
                 ("visual", _staged(lambda c: vis_mod.batch_prefill_captions(ev, c),
                                    caller, lambda: visual_cmd(ev))),
                 ("align", lambda: align_cmd(ev)),
-                ("synthesize", lambda: synthesize_cmd(ev, max_sec=None)),
+                ("synthesize", lambda: synthesize_cmd(ev, max_sec=None, profile=profile)),
                 ("slide_book", _staged(lambda c: sb_mod.batch_prefill_slides(ev, c),
                                        caller, lambda: slide_book_cmd(ev))),
                 ("report", lambda: report_cmd(ev)),
@@ -371,7 +372,8 @@ def visual_cmd(event_id: str | None) -> int:
     return 0
 
 
-def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
+def synthesize_cmd(event_id: str | None, max_sec: float | None,
+                   profile: str | None = None) -> int:
     """M5 (full event) or M2.5 thin (slice mode).
 
     Full event needs M4 alignment + M3 captions; slice mode falls back to
@@ -408,7 +410,7 @@ def synthesize_cmd(event_id: str | None, max_sec: float | None) -> int:
         print(f"no aligned.json at {aligned} — run --align first (M5 needs M4 output)",
               file=sys.stderr)
         return 1
-    synth_mod.synthesize_full(event_id)
+    synth_mod.synthesize_full(event_id, profile=profile)
     return 0
 
 
@@ -537,8 +539,8 @@ def main() -> int:
                         help="aggregate-video cap per event (e.g. 4 = 4h); unset = no cap")
     parser.add_argument("--out", type=Path, default=None, metavar="DIR",
                         help="--source: also copy the finished Report/ bundle to this folder")
-    parser.add_argument("--profile", type=str, default=None,
-                        help="--source: notes template profile (briefing|lecture; M2 hook)")
+    parser.add_argument("--profile", type=str, default=None, choices=["briefing", "lecture"],
+                        help="--source/--pipeline: notes template (briefing=LSIC default | lecture=generic talk)")
     args = parser.parse_args()
     cap_sec = args.cap_video_hours * 3600.0 if args.cap_video_hours else None
 
@@ -564,7 +566,7 @@ def main() -> int:
         return validate_slides_cmd(args.event)
     if args.pipeline:
         return pipeline_cmd(args.event, args.all, args.keep_going, batch=args.batch,
-                            cap_sec=cap_sec)
+                            cap_sec=cap_sec, profile=args.profile)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
     if args.source:

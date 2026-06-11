@@ -68,7 +68,9 @@ def fetch_youtube_meta(url: str, runner: Callable = subprocess.run) -> Optional[
         "uploader": d.get("uploader"),
         "upload_date": d.get("upload_date"),   # YYYYMMDD
         "duration": d.get("duration"),
-        "url": url,
+        "url": d.get("webpage_url") or url,
+        "chapters": d.get("chapters") or [],   # [{title, start_time}] → lecture Outline
+        "description": d.get("description") or "",   # → lecture description-link references
     }
 
 
@@ -127,10 +129,10 @@ def run_adhoc(source: str, *, out: Optional[Path] = None, profile: Optional[str]
     from src import main as main_mod, report as report_mod
     event = build_adhoc_event(source)
     if profile:
-        event.meta = {**(event.meta or {}), "profile": profile}   # M2 hook
+        event.meta = {**(event.meta or {}), "profile": profile}
     append_event(event, work_root=work_root)
     print(f"[adhoc] {source} → event {event.event_id}", flush=True)
-    rc = main_mod.pipeline_cmd(event.event_id, all_flag=False)
+    rc = main_mod.pipeline_cmd(event.event_id, all_flag=False, profile=profile)
     if rc == 0 and out is not None:
         report_mod.assemble_report(event.event_id, work_root=work_root, dest_dir=Path(out))
     return rc

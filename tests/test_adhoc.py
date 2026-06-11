@@ -95,6 +95,16 @@ def test_fetch_youtube_meta_error_returns_none():
     assert adhoc.fetch_youtube_meta("https://youtu.be/x", runner=boom) is None
 
 
+def test_fetch_youtube_meta_captures_chapters_and_description():
+    payload = {"id": "abc12345678", "title": "T",
+               "chapters": [{"title": "Intro", "start_time": 0.0}],
+               "description": "see https://arxiv.org/abs/1234.5678"}
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload))
+    meta = adhoc.fetch_youtube_meta("https://youtu.be/abc12345678", runner=lambda *a, **k: fake)
+    assert meta["chapters"] == [{"title": "Intro", "start_time": 0.0}]
+    assert "arxiv.org/abs/1234.5678" in meta["description"]
+
+
 # ---------- append_event (non-clobber) ----------
 
 def _seed_events_json(work_root):

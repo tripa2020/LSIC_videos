@@ -311,11 +311,18 @@ HARD RULES:
 8. Each per_question_analysis entry: 2-3 role_takes."""
 
 
-def synthesize_full(event_id: str, work_root: Path = Path("work")) -> Path:
-    """Full M5: per-presentation + thematic Gemini calls + Evidence-grounded render."""
+def synthesize_full(event_id: str, work_root: Path = Path("work"),
+                    profile: str | None = None) -> Path:
+    """Full M5: per-presentation + thematic Gemini calls + Evidence-grounded render.
+
+    ``profile`` selects the notes template (default ``briefing`` = today, byte-identical;
+    ``lecture`` = a generic talk template that skips per-presentation calls + the role pool).
+    """
     from src.contracts import IngestResult
     from src.ingest import load_events_json
+    from src.profiles import get_profile
 
+    prof = get_profile(profile)
     workdir = work_root / "events" / event_id
     out_path = workdir / util.STAGE_BRIEFING / "notes.md"
     if util.is_complete(out_path):       # resume-free: skip if already synthesized (no re-spend)
@@ -343,11 +350,12 @@ def synthesize_full(event_id: str, work_root: Path = Path("work")) -> Path:
     event = next(e for e in events if e.event_id == event_id)
     host_deck_ids = {str(a.lsic_id) for a in event.assets if a.kind == "host_deck"}
 
-    role_pool = _load_role_pool(Path("clai/.claude/Behavior/Roles.md"))
+    role_pool = _load_role_pool(Path("clai/.claude/Behavior/Roles.md")) if prof.uses_role_pool else []
     deck_text_by_asset = _load_deck_text(workdir, event.assets)
 
-    # 2. Per-presentation Claude calls (skip host_deck)
-    guest_pres = [p for p in alignment.presentations if p.asset_id not in host_deck_ids]
+    # 2. Per-presentation Claude calls (skip host_deck) — briefing only; lecture has no decks
+    guest_pres = ([p for p in alignment.presentations if p.asset_id not in host_deck_ids]
+                  if prof.uses_presentations else [])
     pres_outputs: list[dict] = []
     for p in guest_pres:
         print(f"  [synthesize] presentation {p.asset_id} ({int(p.start//60):02d}:"
@@ -363,7 +371,8 @@ def synthesize_full(event_id: str, work_root: Path = Path("work")) -> Path:
 
     # 3. Thematic call (one big call assembling everything else)
     print("  [synthesize] thematic synthesis (1 big call)…", flush=True)
-    thematic = _call_thematic(client, alignment, evidence, role_pool, pres_outputs)
+    thematic = _call_thematic(client, alignment, evidence, role_pool, pres_outputs,
+                              system_prompt=prof.thematic_system_prompt)
 
     # 4. Slide highlights from has_diagram captions (deterministic pick)
     slide_highlights = _select_slide_highlights(captions, n=3)
@@ -371,11 +380,15 @@ def synthesize_full(event_id: str, work_root: Path = Path("work")) -> Path:
     # 5. Render markdown
     n_speakers = len({s.speaker_id for sec in alignment.sections for s in []
                      if False}) or _count_speakers(workdir)
-    notes_md = _render_briefing(
+    # source_meta = the video asset's metadata (YouTube chapters/description for the lecture
+    # profile's Outline + description links). Briefing ignores it via **_kwargs.
+    video_asset = next((a for a in event.assets if a.kind == "video"), None)
+    source_meta = (video_asset.meta if video_asset else None) or {}
+    notes_md = prof.render(
         ing=ing, alignment=alignment, pres_outputs=pres_outputs,
         thematic=thematic, slide_highlights=slide_highlights,
         evidence_by_id=ev_by_id, event_date=str(event.date),
-        n_speakers=n_speakers,
+        n_speakers=n_speakers, source_meta=source_meta,
     )
 
     # 6. Write with manifest
@@ -513,7 +526,8 @@ def _call_presentation(client: genai.Client, p: Presentation,
 
 def _call_thematic(client: genai.Client, alignment: AlignmentResult,
                    evidence: list[Evidence], role_pool: list[dict],
-                   pres_outputs: list[dict]) -> dict:
+                   pres_outputs: list[dict],
+                   system_prompt: str = THEMATIC_SYSTEM_PROMPT) -> dict:
     # Build compact context: section-summarized transcript with evidence markers
     ctx_lines = []
     transcript_ev = [e for e in evidence if e.kind == "transcript"]
@@ -535,7 +549,7 @@ def _call_thematic(client: genai.Client, alignment: AlignmentResult,
     context = context[:140_000]
 
     role_pool_lines = "\n".join(f"- {r['name']}" for r in role_pool)
-    sys_prompt = THEMATIC_SYSTEM_PROMPT.replace("{role_pool}", role_pool_lines)
+    sys_prompt = system_prompt.replace("{role_pool}", role_pool_lines)  # no-op if no placeholder
 
     pres_summary = "\n\n".join(
         f"--- PRESENTATION {p['asset_id']} ---\n{json.dumps(p, indent=2)[:1500]}"
@@ -570,7 +584,9 @@ def _render_briefing(*, ing: IngestResult, alignment: AlignmentResult,
                      pres_outputs: list[dict], thematic: dict,
                      slide_highlights: list[Caption],
                      evidence_by_id: dict[str, Evidence],
-                     event_date: str, n_speakers: int) -> str:
+                     event_date: str, n_speakers: int, **_kwargs) -> str:
+    # **_kwargs swallows profile-only extras (e.g. source_meta) so synthesize_full can call
+    # every profile's render uniformly. Briefing ignores them — output is byte-identical.
     def cite(eid: Optional[str]) -> str:
         if not eid:
             return ""
