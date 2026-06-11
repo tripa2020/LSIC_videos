@@ -132,7 +132,9 @@ def run_adhoc(source: str, *, out: Optional[Path] = None, profile: Optional[str]
         event.meta = {**(event.meta or {}), "profile": profile}
     append_event(event, work_root=work_root)
     print(f"[adhoc] {source} → event {event.event_id}", flush=True)
-    rc = main_mod.pipeline_cmd(event.event_id, all_flag=False, profile=profile)
+    # ad-hoc enriches by default (request #3 is the whole point for new sources); degrades
+    # to a skip-stub when offline.
+    rc = main_mod.pipeline_cmd(event.event_id, all_flag=False, profile=profile, references=True)
     if rc == 0 and out is not None:
         report_mod.assemble_report(event.event_id, work_root=work_root, dest_dir=Path(out))
     return rc

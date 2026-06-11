@@ -19,7 +19,7 @@ SRC_MODULES = [
     "src.contracts", "src.util", "src.validators", "src.discover", "src.ingest",
     "src.transcribe", "src.visual", "src.align", "src.synthesize",
     "src.slide_book", "src.report", "src.status", "src.pptx_handler", "src.pdf_handler",
-    "src.adhoc", "src.profiles", "src.profiles.lecture",
+    "src.adhoc", "src.profiles", "src.profiles.lecture", "src.enrich_citations",
 ]
 
 
@@ -256,7 +256,7 @@ def _staged(prefill_fn, caller, cmd):
 
 def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
                  batch: bool = False, cap_sec: float | None = None,
-                 profile: str | None = None) -> int:
+                 profile: str | None = None, references: bool = False) -> int:
     """Chain ingest→transcribe→visual→align→synthesize→slide_book→report per event.
 
     keep_going=False (default) aborts the batch on the first failing stage (today's
@@ -318,6 +318,9 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
                                        caller, lambda: slide_book_cmd(ev))),
                 ("report", lambda: report_cmd(ev)),
             ]
+        if references:   # M3: insert the enrich stage right after synthesize (opt-in for pipeline)
+            syn_idx = next(i for i, (n, _) in enumerate(stages) if n == "synthesize")
+            stages.insert(syn_idx + 1, ("enrich", lambda: enrich_cmd(evt)))
         ok, failed = run_event_stages(evt, stages)
         if not ok:
             failures.append((evt, failed))
@@ -411,6 +414,17 @@ def synthesize_cmd(event_id: str | None, max_sec: float | None,
               file=sys.stderr)
         return 1
     synth_mod.synthesize_full(event_id, profile=profile)
+    return 0
+
+
+def enrich_cmd(event_id: str | None) -> int:
+    """M3: enrich the briefing with related papers → references.md (degrades to a skip-stub
+    when the search source is unreachable; never fatal)."""
+    if not event_id:
+        print("--enrich requires --event <id>", file=sys.stderr)
+        return 1
+    from src import enrich_citations as enrich_mod
+    enrich_mod.enrich_citations(event_id)
     return 0
 
 
@@ -515,6 +529,8 @@ def main() -> int:
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--source", type=str, default=None, metavar="URL|PATH",
                    help="ad-hoc: a YouTube URL or local video file → full pipeline → Report/")
+    g.add_argument("--enrich", action="store_true",
+                   help="M3: related-paper enrichment → references.md (use --event)")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
                    help="run validate_notes on a notes.md file")
     g.add_argument("--validate-ingest", action="store_true",
@@ -541,6 +557,9 @@ def main() -> int:
                         help="--source: also copy the finished Report/ bundle to this folder")
     parser.add_argument("--profile", type=str, default=None, choices=["briefing", "lecture"],
                         help="--source/--pipeline: notes template (briefing=LSIC default | lecture=generic talk)")
+    parser.add_argument("--references", action="store_true",
+                        help="--pipeline: also run related-paper enrichment (off by default; "
+                             "on automatically for --source)")
     args = parser.parse_args()
     cap_sec = args.cap_video_hours * 3600.0 if args.cap_video_hours else None
 
@@ -566,9 +585,11 @@ def main() -> int:
         return validate_slides_cmd(args.event)
     if args.pipeline:
         return pipeline_cmd(args.event, args.all, args.keep_going, batch=args.batch,
-                            cap_sec=cap_sec, profile=args.profile)
+                            cap_sec=cap_sec, profile=args.profile, references=args.references)
     if args.synthesize:
         return synthesize_cmd(args.event, args.max_sec)
+    if args.enrich:
+        return enrich_cmd(args.event)
     if args.source:
         from src import adhoc
         return adhoc.run_adhoc(args.source, out=args.out, profile=args.profile)

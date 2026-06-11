@@ -16,7 +16,8 @@ from src import util
 
 WORK_ROOT = Path("work")
 # equations.md promoted into Report/ per the cloud-batch output contract ("Report + equations").
-REPORT_FILES = ["notes.md", "slides.pdf", "slide_captions.md", "equations.md"]
+# references.md is the M3 enrich output (present only when enrichment ran; missing = tolerated).
+REPORT_FILES = ["notes.md", "slides.pdf", "slide_captions.md", "equations.md", "references.md"]
 
 
 def assemble_report(event_id: str, work_root: Path = WORK_ROOT,

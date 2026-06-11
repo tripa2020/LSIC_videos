@@ -22,6 +22,7 @@ STAGE_TRANSCRIPT = "02_transcript"  # transcript.json, chunks/
 STAGE_KEYFRAMES = "03_keyframes"   # captions.json, frames/
 STAGE_ALIGNED = "04_aligned"       # aligned.json, evidence.json (M4)
 STAGE_BRIEFING = "05_briefing"     # notes.md (M5)
+STAGE_REFERENCES = "06_references"  # references.md/.json (M3 enrich — related papers)
 
 
 def strip_fences(s: str) -> str:

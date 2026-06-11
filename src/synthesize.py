@@ -373,6 +373,10 @@ def synthesize_full(event_id: str, work_root: Path = Path("work"),
     print("  [synthesize] thematic synthesis (1 big call)…", flush=True)
     thematic = _call_thematic(client, alignment, evidence, role_pool, pres_outputs,
                               system_prompt=prof.thematic_system_prompt)
+    # persist the structured thematic JSON so the enrich-citations stage (M3) has claims to
+    # query without re-running synthesis; harmless extra artifact, no manifest gate needed.
+    util.atomic_write_text(workdir / util.STAGE_BRIEFING / "thematic.json",
+                           json.dumps(thematic, indent=2, default=str))
 
     # 4. Slide highlights from has_diagram captions (deterministic pick)
     slide_highlights = _select_slide_highlights(captions, n=3)
