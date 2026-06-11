@@ -35,9 +35,19 @@ Output ONLY a single JSON object with EXACTLY this shape:
   "notable_claims": [{"text": "<a specific claim>", "basis": "<one-line basis/evidence shown>", "evidence_id": "ev_..."}],
   "open_questions": [{"text": "<an unresolved question raised>", "evidence_id": "ev_..."}],
   "takeaways":      [{"text": "<an actionable takeaway for the viewer>", "evidence_id": "ev_..."}],
+  "field_implications": [{"text": "<what someone working IN this field should transition toward, or a skill/competency the speakers say or imply practitioners need to gain>", "evidence_id": "ev_..."}],
+  "industry_outlook": {
+    "fading":   [{"text": "<an approach/tool/role/market the speakers say or imply is declining or being displaced>", "evidence_id": "ev_..."}],
+    "thriving": [{"text": "<an approach/tool/role/market the speakers say or imply is growing or will dominate>", "evidence_id": "ev_..."}]
+  },
   "speakers":       [{"label": "A", "role": "<role/identity if inferable>", "time_range": "00:00→04:30"}],
   "citations":      [{"text": "<a paper/tool/dataset/standard the speaker cited>", "evidence_id": "ev_..."}]
 }
+
+FIELD IMPLICATIONS & INDUSTRY OUTLOOK: extract these even when the speakers only IMPLY them
+(e.g. "we've moved entirely to X" implies the old approach is fading and X is thriving; "you
+really need to understand Y now" implies a skill to gain). Be concrete about what to learn or
+pivot to. If the talk genuinely has no such signal, use an empty list.
 
 EXPERT LENSES: choose 3-5 perspectives that genuinely fit this video's subject (e.g. an ML talk →
 ML researcher, systems engineer, practitioner; a history talk → historian, primary-source archivist,
@@ -111,6 +121,9 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
                  + (f" — {b['basis'].strip()}" if b.get("basis") else "")), "",
         "## Open Questions", *section(thematic.get("open_questions", [])), "",
         "## Takeaways", *section(thematic.get("takeaways", [])), "",
+        "## Field Implications — Where to Steer",
+        *section(thematic.get("field_implications", [])), "",
+        *_outlook_lines(thematic.get("industry_outlook") or {}, section), "",
         "## Speakers",
     ]
     speakers = thematic.get("speakers", [])
@@ -127,6 +140,21 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
         out.append(f"- {url.rstrip('.,);')}  *(from video description)*")
     out.append("")
     return "\n".join(out)
+
+
+def _outlook_lines(outlook: dict, section) -> list[str]:
+    """Render the Industry Outlook block (fading vs thriving). ``section`` is the caller's
+    evidence-grounded bullet renderer. Both empty → a single 'Not applicable' line."""
+    fading = outlook.get("fading", []) if isinstance(outlook, dict) else []
+    thriving = outlook.get("thriving", []) if isinstance(outlook, dict) else []
+    lines = ["## Industry Outlook — Fading vs Thriving"]
+    if not fading and not thriving:
+        return lines + ["*Not applicable to this talk.*"]
+    lines.append("**📉 Fading**")
+    lines += section(fading)
+    lines += ["", "**📈 Thriving**"]
+    lines += section(thriving)
+    return lines
 
 
 def _dedupe(items: list[str]) -> list[str]:

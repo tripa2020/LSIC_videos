@@ -65,6 +65,9 @@ _FULL_THEMATIC = {
     "methods": [{"text": "Soft Actor-Critic with HER", "evidence_id": "ev_2"}],
     "notable_claims": [{"text": "90% grasp success", "basis": "200-trial eval", "evidence_id": "ev_3"}],
     "open_questions": [], "takeaways": [{"text": "Use dense rewards", "evidence_id": "ev_1"}],
+    "field_implications": [{"text": "Learn JAX for accelerator-native RL", "evidence_id": "ev_2"}],
+    "industry_outlook": {"fading": [{"text": "Hand-tuned PID controllers", "evidence_id": "ev_3"}],
+                         "thriving": [{"text": "Learned end-to-end policies", "evidence_id": "ev_1"}]},
     "speakers": [{"label": "A", "role": "presenter", "time_range": "00:00→09:00"}],
     "citations": [{"text": "Andrychowicz et al. HER", "evidence_id": "ev_2"}],
 }
@@ -81,8 +84,13 @@ def test_lecture_render_full_sections():
                                 event_date="2026-06-11", n_speakers=1, source_meta=sm)
     for h in ["## Summary", "## Through 1 Expert Lenses", "## Outline", "## Key Points",
               "## Methods / Approach", "## Notable Claims & Evidence", "## Open Questions",
-              "## Takeaways", "## Speakers", "## References & Resources Mentioned"]:
+              "## Takeaways", "## Field Implications — Where to Steer",
+              "## Industry Outlook — Fading vs Thriving", "## Speakers",
+              "## References & Resources Mentioned"]:
         assert h in md, f"missing {h}"
+    assert "Learn JAX" in md                                  # field implication
+    assert "📉 Fading" in md and "Hand-tuned PID" in md        # outlook fading
+    assert "📈 Thriving" in md and "Learned end-to-end" in md  # outlook thriving
     assert md.startswith("---")                              # frontmatter
     assert "profile: lecture" in md
     assert "🧠 **ML Researcher**" in md and "`[00:12]`" in md     # lens + grounded cite
@@ -102,6 +110,10 @@ def test_lecture_render_no_youtube_meta_omits_outline():
                                 source_meta=None)
     assert "## Outline" not in md                             # no chapters → no Outline
     assert "## Summary" in md and "## Through Expert Lenses" in md
+    # forward-looking sections still render, degrading cleanly when empty
+    assert "## Field Implications — Where to Steer" in md
+    assert "## Industry Outlook — Fading vs Thriving" in md
+    assert md.count("*Not applicable to this talk.*") >= 2     # incl. empty outlook
 
 
 def test_lecture_render_dedupes_description_links():
