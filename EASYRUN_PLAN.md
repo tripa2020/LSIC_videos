@@ -111,7 +111,14 @@ python -m pytest tests/ -q && python -m src.main --selftest                     
 ## Footer
 
 ### Known Failures
-(none yet for EASYRUN — populate after the first live `--source` debug session.)
+_From the first live `--source` verification (2026-06-11, Karpathy 2.4 h talk — full bundle produced)._
+
+| Symptom | Root cause | Status |
+|---------|-----------|--------|
+| `references.md` empty (`CERTIFICATE_VERIFY_FAILED`) | macOS framework Python lacks a CA bundle; urllib couldn't verify arXiv's cert | ✅ Fixed (M3.1) — https + certifi SSL context |
+| `references.md` empty even with SSL | `derive_queries` emitted full claim sentences; arXiv `all:` matches terms not phrases | ✅ Fixed (M3.1) — keyword-ify; **residual:** metaphorical claims ("building ghosts") match off-target. LLM query-gen is the upgrade |
+| Ingest died on a transient yt-dlp 503/throttle | `ingest._fetch_youtube`/`_fetch_http` have no **whole-command** retry (yt-dlp's internal `--retries` don't cover a fast non-zero exit) | **OPEN** — worked around by staging the file; wrap both in `util.retry_transient`-style retry |
+| Transcribe exhausted 5-retry budget on some chunks | Gemini `503 "high demand"` storm + 12-way concurrency saturates the model | Mitigated — `ASR_CONCURRENCY=3` rode it out (per-chunk cache resumes); consider lowering the default under sustained 503s |
 
 ### Out of scope (tracked elsewhere)
 - `run_corpus.sh` event-drop bug (M-F2 blocker) — OPEN in `CLOUD_BATCH_PLAN.md`.
