@@ -18,16 +18,28 @@ from src import util
 
 # ---------- query derivation (deterministic) ----------
 
-def test_derive_queries_from_thematic_strips_cites_and_dedupes():
-    th = {"title": "RL for Grasping",
-          "notable_claims": [{"text": "SAC improves efficiency `[00:12]`"}],
-          "key_points": [{"text": "off-policy"}, {"text": "off-policy"}]}   # dup
+def test_derive_queries_keywordizes_drops_title_and_short():
+    th = {"title": "A Talk About Things",                                       # title dropped (identity)
+          "notable_claims": [{"text": "Reinforcement learning improves sample efficiency `[00:12]`"}],
+          "key_points": [{"text": "off-policy methods"}, {"text": "off-policy methods"}]}   # dup
     qs = ec.derive_queries(th, k=5)
-    assert qs == ["RL for Grasping", "SAC improves efficiency", "off-policy"]   # cite stripped, deduped
+    # cites stripped, stopwords dropped, keyworded, deduped; title NOT a query
+    assert qs == ["reinforcement learning improves sample efficiency", "off-policy methods"]
+
+
+def test_keywordize_drops_stopwords_cites_and_caps():
+    assert ec._keywordize("The model is just terrible `[01:02]`", max_words=6) == "model"
+    assert ec._keywordize("Sparse attention enables long context windows efficiently") \
+        == "sparse attention enables long context windows"
+
+
+def test_derive_queries_drops_single_term_queries():
+    # a one-word keyword query (after stopwording) is dropped — needs ≥2 terms
+    assert ec.derive_queries({"key_points": [{"text": "the it is"}]}) == []
 
 
 def test_derive_queries_caps_k():
-    th = {"key_points": [{"text": f"point {i}"} for i in range(20)]}
+    th = {"key_points": [{"text": f"neural architecture method{i}"} for i in range(20)]}
     assert len(ec.derive_queries(th, k=4)) == 4
 
 
@@ -85,7 +97,7 @@ def _seed_briefing(work_root, event_id, thematic, notes="# notes\n"):
 
 
 def test_enrich_with_fake_client_writes_outputs(tmp_path):
-    _seed_briefing(tmp_path, "yt_x", {"title": "RL grasping", "key_points": [{"text": "off-policy"}]})
+    _seed_briefing(tmp_path, "yt_x", {"notable_claims": [{"text": "deep reinforcement learning for grasping"}]})
     client = _FakeClient([ec.Reference(title="Deep RL", arxiv_id="1707.06347", url="http://arxiv.org/abs/1707.06347")])
     out = ec.enrich_citations("yt_x", work_root=tmp_path, client=client)
     assert out.exists()                                           # 06_references/references.md

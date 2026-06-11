@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import ssl
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -25,8 +26,30 @@ from src import util
 WORK_ROOT = Path("work")
 STAGE = util.STAGE_REFERENCES
 
-_ARXIV_API = "http://export.arxiv.org/api/query"
+_ARXIV_API = "https://export.arxiv.org/api/query"   # https — http 301-redirects and breaks SSL
 _ATOM = "{http://www.w3.org/2005/Atom}"
+
+# macOS framework Python ships without a usable CA bundle → urllib fails cert verification.
+# Use certifi's bundle when available (it's a transitive dep); fall back to the default context.
+try:
+    import certifi
+    _SSL_CTX: Optional[ssl.SSLContext] = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CTX = None
+
+# Filler dropped when turning a claim sentence into a keyword query (arXiv `all:` matches terms,
+# not natural-language phrases, so full sentences return nothing).
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "for", "nor", "so", "yet", "of", "to", "in", "on",
+    "at", "by", "from", "with", "as", "is", "are", "was", "were", "be", "been", "being", "it",
+    "its", "this", "that", "these", "those", "we", "you", "they", "i", "he", "she", "our",
+    "your", "their", "not", "no", "just", "very", "much", "more", "most", "can", "will",
+    "would", "should", "could", "may", "might", "do", "does", "did", "have", "has", "had",
+    "about", "into", "than", "then", "them", "all", "any", "some", "such", "like", "actually",
+    "really", "happens", "everything", "anything", "something", "things", "thing", "one",
+    "also", "because", "which", "what", "when", "how", "why", "where", "who", "still", "even",
+    "only", "now", "new", "good", "bad", "terrible", "better", "worse", "before", "after",
+}
 
 
 @dataclass
@@ -59,7 +82,7 @@ class ArxivClient:
                 {"search_query": f"all:{query}", "start": 0, "max_results": limit})
             req = urllib.request.Request(f"{_ARXIV_API}?{qs}",
                                          headers={"User-Agent": "lsic-pipeline/1.0"})
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX) as r:
                 return _parse_arxiv_atom(r.read().decode(), query)
         return util.retry_transient(_do)
 
@@ -90,13 +113,21 @@ def make_search_client() -> Optional[SearchClient]:
         return None
 
 
+def _keywordize(text: str, max_words: int = 6) -> str:
+    """Turn a claim sentence into a short keyword query — arXiv `all:` matches terms, not
+    natural-language phrases, so we drop stopwords/cites and keep the distinctive terms."""
+    text = re.sub(r"`?\[[0-9:]+\]`?", " ", text.lower())          # strip [mm:ss] cites
+    words = re.findall(r"[a-z][a-z0-9-]{2,}", text)
+    kept = [w for w in words if w not in _STOPWORDS]
+    return " ".join(kept[:max_words])
+
+
 def derive_queries(thematic: dict, notes_md: str = "", k: int = 6) -> list[str]:
-    """Deterministic query extraction from the structured briefing (no LLM, no network).
-    Prefers the thematic JSON's title/claims/methods; falls back to notes.md bullets."""
+    """Deterministic keyword-query extraction from the structured briefing (no LLM, no network).
+    Pulls the technical claims/points/methods (NOT the talk title, which is identity not topic)
+    and keyword-ifies each; falls back to notes.md bullets."""
     raw: list[str] = []
     if thematic:
-        if thematic.get("title"):
-            raw.append(str(thematic["title"]))
         for key in ("notable_claims", "key_points", "methods"):
             for item in thematic.get(key, []) or []:
                 txt = (item.get("text") if isinstance(item, dict) else str(item)) or ""
@@ -108,10 +139,10 @@ def derive_queries(thematic: dict, notes_md: str = "", k: int = 6) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for q in raw:
-        q = re.sub(r"\s+", " ", re.sub(r"`\[[0-9:]+\]`", "", q)).strip()[:120].strip()
-        if q and q.lower() not in seen:
-            seen.add(q.lower())
-            out.append(q)
+        kw = _keywordize(q)
+        if len(kw.split()) >= 2 and kw not in seen:        # need ≥2 terms for a useful search
+            seen.add(kw)
+            out.append(kw)
         if len(out) >= k:
             break
     return out
