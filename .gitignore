@@ -14,6 +14,9 @@ LSIC_Downloads/
 # external tooling — separate concern from this project
 clai/
 
+# stale nested duplicate clone (zero unique commits — already in this repo's history)
+LSIC_videos/
+
 # IDE
 .idea/
 .vscode/
