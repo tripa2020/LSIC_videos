@@ -134,3 +134,66 @@ def test_call_thematic_uses_profile_system_prompt(monkeypatch):
                         lambda client, system, user, max_tokens=0: captured.update(system=system) or {})
     synthesize._call_thematic(None, _align(), [], [], [], system_prompt="LECTURE_MARKER_PROMPT")
     assert "LECTURE_MARKER_PROMPT" in captured["system"]
+
+
+# ---------- cognition layer (additive A/B/C/D) ----------
+
+_COGNITION = {
+    **_FULL_THEMATIC,
+    "notable_claims": [{"text": "90% grasp success", "basis": "200-trial eval",
+                        "status": "his bet", "evidence_id": "ev_3"}],
+    "operating_algorithm": {"arrow_chain": "anchor to physics → find the cost floor → bet on the bottleneck",
+                            "tags": ["Mechanism", "Constraint"]},
+    "cognitive_moves": [
+        {"move": "reward is a straw", "tag": "Mechanism",
+         "work": "collapses 'inefficient' into the specific failure", "evidence_id": "ev_1"},
+        {"move": "memory is a bug", "tag": "Inversion",
+         "work": "flips more-is-better to force generalization", "evidence_id": "ev_2"}],
+    "what_doesnt_transfer": "the timelines are bets; the decompositions are durable",
+    "transfer_questions": [
+        {"prompt": "Where do I judge a long run by one pass/fail?", "from_move": "reward is a straw",
+         "evidence_id": "ev_1"}],
+}
+
+
+def test_lecture_render_cognition_sections_present():
+    md = lecture.render_lecture(ing=_ing(), alignment=_align(), pres_outputs=[],
+                                thematic=_COGNITION, slide_highlights=[], evidence_by_id=_EV,
+                                event_date="2026-06-11", n_speakers=1, source_meta=None)
+    # A — Operating Algorithm (after Summary), with tags
+    assert "## Operating Algorithm" in md and "cost floor" in md
+    assert "*Tags: Mechanism · Constraint*" in md
+    # B — Cognitive Moves: move · tag · work · grounded cite
+    assert "## Cognitive Moves" in md
+    assert "**reward is a straw** — *Mechanism* —" in md and "`[00:12]`" in md
+    # C — inline status tag + the closing "what doesn't transfer" line
+    assert "`[his bet]`" in md
+    assert "**What doesn't transfer:** the timelines are bets" in md
+    # D — Transfer Questions, with from-move attribution
+    assert "## Transfer Questions" in md and "one pass/fail?" in md
+    assert "*(from: reward is a straw)*" in md
+    # placement: A before the lenses; D after Takeaways, before Field Implications
+    assert md.index("## Operating Algorithm") < md.index("## Through 1 Expert Lenses")
+    assert md.index("## Takeaways") < md.index("## Transfer Questions") < md.index("## Field Implications")
+
+
+def test_lecture_cognition_omitted_when_absent():
+    # no cognition fields → additive sections vanish entirely (degrade-to-today), existing intact
+    md = lecture.render_lecture(ing=_ing(), alignment=_align(), pres_outputs=[],
+                                thematic=_FULL_THEMATIC, slide_highlights=[], evidence_by_id=_EV,
+                                event_date="2026-06-11", n_speakers=1, source_meta=None)
+    for h in ["## Operating Algorithm", "## Cognitive Moves", "## Transfer Questions",
+              "**What doesn't transfer:**"]:
+        assert h not in md
+    assert "## Summary" in md and "## Notable Claims & Evidence" in md
+
+
+def test_thematic_prompt_reader_domain(monkeypatch):
+    monkeypatch.delenv("READER_DOMAIN", raising=False)
+    p_none = lecture.thematic_prompt()
+    assert "empty transfer_questions list" in p_none
+    # base cognition schema is always present, reader_domain or not
+    assert "operating_algorithm" in p_none and "cognitive_moves" in p_none
+    monkeypatch.setenv("READER_DOMAIN", "embedded / robotics")
+    p_rd = lecture.thematic_prompt()
+    assert "READER DOMAIN: embedded / robotics" in p_rd and "transfer_questions" in p_rd

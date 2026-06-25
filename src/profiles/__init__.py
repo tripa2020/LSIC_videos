@@ -37,6 +37,6 @@ def get_profile(name: str | None) -> Profile:
                        s._render_briefing, uses_presentations=True, uses_role_pool=True)
     if name == "lecture":
         from src.profiles import lecture
-        return Profile("lecture", "", lecture.THEMATIC_SYSTEM_PROMPT,
+        return Profile("lecture", "", lecture.thematic_prompt(),
                        lecture.render_lecture, uses_presentations=False, uses_role_pool=False)
     raise KeyError(f"unknown profile '{name}' (valid: {', '.join(VALID_PROFILES)})")
