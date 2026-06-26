@@ -21,6 +21,8 @@ from src import util
 
 _URL_RE = re.compile(r"https?://[^\s<>)\"']+")
 
+# DEPTH v2: the DESCRIPTIVE call (what was said). The cognition fields moved to a dedicated
+# focused call — see COGNITION_SYSTEM_PROMPT / cognition_prompt below.
 THEMATIC_SYSTEM_PROMPT = """You distill a talk / lecture / video transcript (plus any slide text) into a concise, structured briefing for a curious technical viewer.
 
 Output ONLY a single JSON object with EXACTLY this shape:
@@ -33,7 +35,7 @@ Output ONLY a single JSON object with EXACTLY this shape:
   ],
   "key_points":     [{"text": "<a main point made>", "evidence_id": "ev_..."}],
   "methods":        [{"text": "<a method / approach / technique used or described>", "evidence_id": "ev_..."}],
-  "notable_claims": [{"text": "<a specific claim>", "basis": "<one-line basis/evidence shown>", "status": "<consensus|his bet|contested|his frame>", "evidence_id": "ev_..."}],
+  "notable_claims": [{"text": "<a specific load-bearing claim>", "basis": "<one-line basis/evidence shown>", "evidence_id": "ev_..."}],
   "open_questions": [{"text": "<an unresolved question raised>", "evidence_id": "ev_..."}],
   "takeaways":      [{"text": "<an actionable takeaway for the viewer>", "evidence_id": "ev_..."}],
   "field_implications": [{"text": "<what someone working IN this field should transition toward, or a skill/competency the speakers say or imply practitioners need to gain>", "evidence_id": "ev_..."}],
@@ -42,11 +44,7 @@ Output ONLY a single JSON object with EXACTLY this shape:
     "thriving": [{"text": "<an approach/tool/role/market the speakers say or imply is growing or will dominate>", "evidence_id": "ev_..."}]
   },
   "speakers":       [{"label": "A", "role": "<role/identity if inferable>", "time_range": "00:00→04:30"}],
-  "citations":      [{"text": "<a paper/tool/dataset/standard the speaker cited>", "evidence_id": "ev_..."}],
-  "operating_algorithm": {"arrow_chain": "<the speaker's repeatable reasoning PROCEDURE as a → chain — the procedure that generates their conclusions, NOT the conclusions>", "tags": ["<2-4 move-tags from the EXPLAINER set>"]},
-  "cognitive_moves": [{"move": "<short paraphrase/quote of a repeatable mental move>", "tag": "<one EXPLAINER move-tag>", "work": "<what the move DOES to the listener's model>", "evidence_id": "ev_..."}],
-  "what_doesnt_transfer": "<one line: which of the speaker's positions are bets/taste vs durable mechanisms>",
-  "transfer_questions": [{"prompt": "<reusable question for the READER DOMAIN>", "from_move": "<which move it derives from>", "evidence_id": "ev_..."}]
+  "citations":      [{"text": "<a paper/tool/dataset/standard the speaker cited>", "evidence_id": "ev_..."}]
 }
 
 FIELD IMPLICATIONS & INDUSTRY OUTLOOK: extract these even when the speakers only IMPLY them
@@ -58,36 +56,72 @@ EXPERT LENSES: choose 3-5 perspectives that genuinely fit this video's subject (
 ML researcher, systems engineer, practitioner; a history talk → historian, primary-source archivist,
 economist). Make each take substantive and distinct, not generic praise.
 
-THINKING PROCESS — extract HOW the speaker reasons, not just what they said:
-- operating_algorithm: the speaker's repeatable reasoning PROCEDURE as one arrow-chain (the steps that
-  generate their conclusions), then 2-4 dominant move-tags. NOT a list of conclusions.
-- cognitive_moves: 4-7 repeatable mental moves. For each, tag the OPERATION (not the topic) and say what
-  work the move does on the listener's model. Use ONLY the EXPLAINER tag set:
-  Analogy, Reframe, Mechanism, Base-rate, Inversion, Sequencing, First-principles, Distinction.
-
-EPISTEMIC STATUS (survivorship guard): for each notable_claim set "status" to one of consensus / his bet /
-contested / his frame. Then set what_doesnt_transfer to ONE line separating the speaker's bets & taste
-(hold loosely) from their durable mechanisms (the transferable part).
-
-TRANSFER QUESTIONS: convert the cognitive moves into reusable questions for the READER DOMAIN given below.
-If no READER DOMAIN is provided, return an empty transfer_questions list.
-
 CITATION RULE: every evidence_id MUST be one that appears in the EVENT CONTEXT provided. Never invent
 an evidence_id. A section with no support → an empty list (it renders as "Not applicable to this talk.").
 Be specific and technical. Produce the JSON now."""
 
 
+# DEPTH v2: the dedicated COGNITION call (how the speaker thinks). Its own focused pass so the
+# inferential work isn't crowded out by the ~11 descriptive fields. Routed to Opus 4.8 by default.
+COGNITION_SYSTEM_PROMPT = """You analyze HOW a speaker thinks in a talk/lecture transcript — the repeatable mental operations behind the content, not just what was said. You are given the EVENT CONTEXT: a per-section transcript with [ev_...] evidence markers.
+
+Output ONLY a single JSON object with EXACTLY this shape (no prose, no code fences):
+{
+  "operating_algorithm": {"arrow_chain": "<the speaker's reasoning PROCEDURE as a → chain>", "tags": ["<2-4 EXPLAINER tags>"]},
+  "cognitive_moves": [{"move": "<short quote/paraphrase>", "tag": "<one EXPLAINER tag>", "work": "<what the move does to the listener's model>", "evidence_id": "ev_..."}],
+  "claim_epistemics": [{"evidence_id": "<ev_... of a load-bearing claim present in the EVENT CONTEXT>", "status": "<consensus|his bet|contested|his frame>", "when_it_fails": "<the boundary condition where this claim/play backfires + who has run it and lost>"}],
+  "what_doesnt_transfer": "<one line: which positions are bets/taste vs durable mechanisms>",
+  "transfer_questions": [{"prompt": "<reusable question for the READER DOMAIN>", "from_move": "<which move it derives from>", "evidence_id": "ev_..."}]
+}
+
+OPERATING ALGORITHM: one arrow-chain capturing the speaker's IDIOSYNCRATIC, TRANSFERABLE reasoning
+signature — the repeatable procedure that GENERATES their conclusions. This is NOT a talk outline or
+topic sequence. If your chain reads like "intro → background → method → results", you have described
+the TALK, not the THINKING — redo it as the distinctive moves only THIS speaker runs. End with 2-4
+dominant move-tags.
+
+COGNITIVE MOVES: 4-7 entries. Tag the OPERATION, not the topic. For each, say what WORK the move does
+on the listener's model (what it swaps / collapses / maps / flips / re-anchors). Use ONLY the EXPLAINER
+tag set: Analogy, Reframe, Mechanism, Base-rate, Inversion, Sequencing, First-principles, Distinction.
+
+EPISTEMIC STATUS (survivorship guard): you are given a CLAIMS TO TAG list below (each is an [evidence_id]
+plus the claim text). Emit ONE claim_epistemic per listed claim, keyed by that exact evidence_id (so the
+judgement overlays the right claim). status ∈ consensus / his bet / contested / his frame. when_it_fails =
+the boundary condition where this claim/play BACKFIRES, and who has run the same play and lost — reason
+from your OWN knowledge, NO external lookup. Then what_doesnt_transfer = ONE line separating the speaker's
+bets & taste (hold loosely) from their durable mechanisms (the transferable part).
+
+TRANSFER QUESTIONS: convert the cognitive moves into reusable self-questions for the READER DOMAIN given
+below — ONE question per major move, each tied to its move and grounded in an evidence_id where possible.
+If no READER DOMAIN is provided, return an empty list.
+
+VERBOSITY: match the Cognitive Moves level — one substantive sentence per item, no padding.
+
+CITATION RULE: every evidence_id MUST appear in the EVENT CONTEXT. Never invent one. No support → an
+empty list. Produce the JSON now."""
+
+
 def thematic_prompt() -> str:
-    """The lecture thematic system prompt, with the READER DOMAIN (env ``READER_DOMAIN``) woven in for
-    Transfer Questions (section D). No env set ⇒ instruct an empty list ⇒ the section is omitted."""
-    rd = os.environ.get("READER_DOMAIN", "").strip()
-    if rd:
-        tail = (f"\n\nREADER DOMAIN: {rd}\nGenerate 3-5 transfer_questions converting the cognitive moves "
-                f"into questions a practitioner in this domain should ask themselves; ground each in an "
-                f"evidence_id where possible.")
-    else:
+    """The lecture DESCRIPTIVE system prompt (the cognition fields moved to the dedicated cognition
+    call — see ``cognition_prompt``)."""
+    return THEMATIC_SYSTEM_PROMPT
+
+
+def cognition_prompt(reader_domain: str = "", current_work: str = "") -> str:
+    """The dedicated cognition system prompt, with READER DOMAIN + optional CURRENT WORK woven in for
+    the Transfer Questions. No reader domain (arg or env ``READER_DOMAIN``) ⇒ an empty
+    transfer_questions list ⇒ that section is omitted. ``CURRENT_WORK`` (arg or env) sharpens the
+    questions from domain-level to project-level."""
+    rd = (reader_domain or os.environ.get("READER_DOMAIN", "")).strip()
+    cw = (current_work or os.environ.get("CURRENT_WORK", "")).strip()
+    if not rd:
         tail = "\n\nREADER DOMAIN: (none) — return an empty transfer_questions list."
-    return THEMATIC_SYSTEM_PROMPT + tail
+    else:
+        tail = f"\n\nREADER DOMAIN: {rd}"
+        if cw:
+            tail += ("\nCURRENT WORK (sharpen each transfer_question from domain-level to PROJECT-level "
+                     f"against this): {cw}")
+    return COGNITION_SYSTEM_PROMPT + tail
 
 
 def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highlights,
@@ -143,6 +177,41 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
                 + cite(q.get('evidence_id')) for q in qs]
         return ["## Transfer Questions", *rows, ""]
 
+    # epistemic overlay from the cognition call, matched to descriptive claims by evidence_id
+    _epi = {e.get("evidence_id"): e for e in (thematic.get("claim_epistemics") or [])
+            if e.get("evidence_id")}
+
+    def claims_lines() -> list[str]:
+        """Descriptive Notable Claims, overlaid with the cognition call's epistemic status +
+        'fails when' survivorship sub-line (matched by evidence_id). Any cognition epistemic that
+        matched NO descriptive claim is surfaced as its own note rather than silently dropped, so
+        the survivorship analysis always reaches the reader."""
+        claims = thematic.get("notable_claims") or []
+        matched: set = set()
+        rows: list[str] = []
+        for b in claims:
+            eid = b.get("evidence_id")
+            o = _epi.get(eid, {})
+            if o:
+                matched.add(eid)
+            line = "- " + b.get("text", "").strip()
+            if b.get("basis"):
+                line += f" — {b['basis'].strip()}"
+            if o.get("status"):
+                line += f" `[{o['status'].strip()}]`"
+            rows.append(line + cite(eid))
+            if o.get("when_it_fails"):
+                rows.append(f"  ↳ *fails when:* {o['when_it_fails'].strip()}")
+        for e in (thematic.get("claim_epistemics") or []):   # orphaned epistemics → keep the analysis
+            eid = e.get("evidence_id")
+            if eid in matched or not (e.get("status") or e.get("when_it_fails")):
+                continue
+            tag = f" `[{e['status'].strip()}]`" if e.get("status") else ""
+            rows.append(f"- *(epistemic note)*{tag}{cite(eid)}")
+            if e.get("when_it_fails"):
+                rows.append(f"  ↳ *fails when:* {e['when_it_fails'].strip()}")
+        return rows or ["*Not applicable to this talk.*"]
+
     title = thematic.get("title") or getattr(alignment, "event_id", "Untitled")
     dur = util.mmss(ing.duration_sec).strip("[]")
     lenses = thematic.get("expert_lenses", [])
@@ -180,10 +249,7 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
         "## Key Points", *section(thematic.get("key_points", [])), "",
         "## Methods / Approach", *section(thematic.get("methods", [])), "",
         "## Notable Claims & Evidence",
-        *section(thematic.get("notable_claims", []),
-                 fmt=lambda b: b.get("text", "").strip()
-                 + (f" — {b['basis'].strip()}" if b.get("basis") else "")
-                 + (f" `[{b['status'].strip()}]`" if b.get("status") else "")), "",  # C — status
+        *claims_lines(), "",                                  # C — claims + status + when_it_fails
         *wdt_lines(),                                          # C — what doesn't transfer
         "## Open Questions", *section(thematic.get("open_questions", [])), "",
         "## Takeaways", *section(thematic.get("takeaways", [])), "",

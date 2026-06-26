@@ -15,5 +15,12 @@ Pillow>=10.0
 # acquisition front-end (download_lsic)
 yt-dlp>=2025.1
 
+# DEPTH v2: the lecture cognition synthesis call routes to Claude (Opus 4.8) by default.
+# Scoped to that one call (anthropic_caller imports it lazily); the 122 LSIC briefing batch
+# stays single-backend Gemini. Needs ANTHROPIC_API_KEY at runtime; not needed for tests.
+# Floor is 0.77: that's where `output_config` lands (`thinking` arrived earlier at 0.68); a
+# lower-but-satisfying install would TypeError on the live call and silently drop cognition.
+anthropic>=0.77,<1
+
 # dev / test
 pytest>=8.0

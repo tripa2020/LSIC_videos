@@ -242,3 +242,44 @@ class Briefing(BaseModel):
     speakers: list[str]
     citations: list[str]
     slide_highlights: list[SlideHighlight]
+
+
+# --- DEPTH v2: cognition layer (the dedicated cognition-call output schema) ---
+
+class OperatingAlgorithm(BaseModel):
+    """The speaker's idiosyncratic, transferable reasoning signature as one arrow-chain."""
+    arrow_chain: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
+class CognitiveMove(BaseModel):
+    """One repeatable mental move, tagged by OPERATION (not topic) + the work it does."""
+    move: str = ""
+    tag: str = ""
+    work: str = ""
+    evidence_id: str = ""
+
+
+class ClaimEpistemic(BaseModel):
+    """Epistemic overlay for a descriptive notable_claim, matched by ``evidence_id``. The claims
+    themselves stay in the descriptive call; the cognition call only adds the judgement so claims
+    survive a cognition failure (matched on evidence_id, un-matched claims simply render untagged)."""
+    evidence_id: str = ""
+    status: str = ""           # consensus | his bet | contested | his frame
+    when_it_fails: str = ""     # boundary condition where the play backfires (+ who lost running it)
+
+
+class TransferQuestion(BaseModel):
+    """A reusable self-question derived from a cognitive move, for the reader's domain."""
+    prompt: str = ""
+    from_move: str = ""
+    evidence_id: str = ""
+
+
+class CognitionOutput(BaseModel):
+    """The dedicated-cognition-call result (merged into the lecture thematic dict before render)."""
+    operating_algorithm: OperatingAlgorithm = Field(default_factory=OperatingAlgorithm)
+    cognitive_moves: list[CognitiveMove] = Field(default_factory=list)
+    claim_epistemics: list[ClaimEpistemic] = Field(default_factory=list)
+    what_doesnt_transfer: str = ""
+    transfer_questions: list[TransferQuestion] = Field(default_factory=list)

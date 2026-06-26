@@ -24,6 +24,7 @@ class Profile:
     pres_system_prompt: str
     thematic_system_prompt: str
     render: Callable[..., str]
+    synthesize: Callable[..., tuple] = None   # R1: the profile owns its LLM calls → (thematic, pres_outputs)
     uses_presentations: bool = True   # briefing runs per-presentation calls; lecture doesn't
     uses_role_pool: bool = True       # briefing injects {role_pool}; lecture doesn't
 
@@ -34,9 +35,12 @@ def get_profile(name: str | None) -> Profile:
     if name == "briefing":
         from src import synthesize as s   # the existing LSIC template — unchanged
         return Profile("briefing", s.PRES_SYSTEM_PROMPT, s.THEMATIC_SYSTEM_PROMPT,
-                       s._render_briefing, uses_presentations=True, uses_role_pool=True)
+                       s._render_briefing, synthesize=s.briefing_synthesize,
+                       uses_presentations=True, uses_role_pool=True)
     if name == "lecture":
+        from src import synthesize as s
         from src.profiles import lecture
-        return Profile("lecture", "", lecture.thematic_prompt(),
-                       lecture.render_lecture, uses_presentations=False, uses_role_pool=False)
+        return Profile("lecture", "", lecture.thematic_prompt(), lecture.render_lecture,
+                       synthesize=s.lecture_synthesize,
+                       uses_presentations=False, uses_role_pool=False)
     raise KeyError(f"unknown profile '{name}' (valid: {', '.join(VALID_PROFILES)})")

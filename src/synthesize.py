@@ -11,7 +11,7 @@ pipeline). The Anthropic Claude backend lives in git history if needed —
 swap by reverting this module's LLM client.
 
 M5 call budget per event (3-presentation event like 2026-03-26):
-  3x presentation calls + 1x thematic — well under \$1/hr ceiling.
+  3x presentation calls + 1x thematic — well under $1/hr ceiling.
 """
 
 from __future__ import annotations
@@ -19,9 +19,10 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -39,6 +40,12 @@ SYNTH_MODEL = "gemini-2.5-pro"   # was flash — Pro for richer, denser briefing
 THINKING_BUDGET = 0 if "flash" in SYNTH_MODEL else 4096
 MAX_OUTPUT_TOKENS = 8000
 TRANSCRIPT_INPUT_CAP_CHARS = 80_000   # safety cap; full M5 chunks per-section
+
+# DEPTH v2: default model for the dedicated lecture cognition call. The env var `COGNITION_MODEL`
+# overrides it AT CALL TIME (read inside _call_cognition, after load_dotenv) — so a shell export OR
+# a .env entry both work, e.g. `COGNITION_MODEL=gemini-2.5-pro python -m src.main ...` for A/B.
+# `claude-*` → the scoped Anthropic caller (Opus 4.8); any other value → the Gemini path.
+COGNITION_MODEL = "claude-opus-4-8"
 
 SYSTEM_PROMPT = """You write technical engineering briefings from meeting transcripts for C'mander Alex.
 
@@ -350,31 +357,20 @@ def synthesize_full(event_id: str, work_root: Path = Path("work"),
     event = next(e for e in events if e.event_id == event_id)
     host_deck_ids = {str(a.lsic_id) for a in event.assets if a.kind == "host_deck"}
 
-    role_pool = _load_role_pool(Path("clai/.claude/Behavior/Roles.md")) if prof.uses_role_pool else []
     deck_text_by_asset = _load_deck_text(workdir, event.assets)
+    guest_pres = [p for p in alignment.presentations if p.asset_id not in host_deck_ids]
 
-    # 2. Per-presentation Claude calls (skip host_deck) — briefing only; lecture has no decks
-    guest_pres = ([p for p in alignment.presentations if p.asset_id not in host_deck_ids]
-                  if prof.uses_presentations else [])
-    pres_outputs: list[dict] = []
-    for p in guest_pres:
-        print(f"  [synthesize] presentation {p.asset_id} ({int(p.start//60):02d}:"
-              f"{int(p.start%60):02d}-{int(p.end//60):02d}:{int(p.end%60):02d})…",
-              flush=True)
-        out = _call_presentation(client, p, alignment, evidence,
-                                 deck_text_by_asset.get(p.asset_id, ""))
-        # carry presenter metadata through so the thematic call can reference it
-        out["asset_id"] = p.asset_id
-        out["window_start"] = p.start
-        out["window_end"] = p.end
-        pres_outputs.append(out)
-
-    # 3. Thematic call (one big call assembling everything else)
-    print("  [synthesize] thematic synthesis (1 big call)…", flush=True)
-    thematic = _call_thematic(client, alignment, evidence, role_pool, pres_outputs,
-                              system_prompt=prof.thematic_system_prompt)
-    # persist the structured thematic JSON so the enrich-citations stage (M3) has claims to
-    # query without re-running synthesis; harmless extra artifact, no manifest gate needed.
+    # 2. Profile-owned synthesis (R1): each profile runs its own calls — NO mode-branch here.
+    #    briefing = per-presentation + thematic (verbatim); lecture = descriptive + cognition.
+    ctx = SynthesisContext(
+        client=client, alignment=alignment, evidence=evidence,
+        guest_pres=guest_pres, deck_text_by_asset=deck_text_by_asset,
+        reader_domain=os.environ.get("READER_DOMAIN", ""),
+        current_work=os.environ.get("CURRENT_WORK", ""),
+    )
+    thematic, pres_outputs = prof.synthesize(ctx)
+    # persist the structured thematic JSON (incl. any cognition fields) so the enrich-citations
+    # stage (M3) has claims to query without re-running synthesis; harmless extra artifact.
     util.atomic_write_text(workdir / util.STAGE_BRIEFING / "thematic.json",
                            json.dumps(thematic, indent=2, default=str))
 
@@ -457,41 +453,46 @@ def _synth_transient(e: Exception) -> bool:
 
 
 def _call_gemini_json(client: genai.Client, system: str, user: str,
-                      max_tokens: int = 6000) -> dict:
-    resp = None
+                      max_tokens: int = 6000, model: str = SYNTH_MODEL) -> dict:
+    import time as _t
+    thinking_budget = 0 if "flash" in model else 4096  # Pro requires thinking; Flash allows 0
+    raw, resp = "", None
     for attempt in range(5):
         try:
             resp = client.models.generate_content(
-                model=SYNTH_MODEL,
+                model=model,
                 contents=[user],
                 config=types.GenerateContentConfig(
                     system_instruction=system,
                     temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
+                    thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
                     max_output_tokens=max_tokens,
                     response_mime_type="application/json",
                 ),
             )
-            break
+            raw = util.strip_fences(resp.text or "")
+            data = json.loads(raw)
+            if not isinstance(data, dict):   # a JSON array/scalar would crash the caller's .update()
+                raise ValueError(f"non-object JSON ({type(data).__name__})")
+            return data
+        except (json.JSONDecodeError, ValueError) as e:  # flaky/truncated JSON → retry the whole call
+            if attempt < 4:
+                _t.sleep(5 * (attempt + 1))
+                continue
+            dump = Path("/tmp/synthesize_failed_response.txt")
+            dump.write_text(raw)
+            finish = getattr(resp.candidates[0], "finish_reason", "?") if (resp and resp.candidates) else "?"
+            truncated = str(finish) == "MAX_TOKENS"
+            raise RuntimeError(
+                f"Gemini returned invalid JSON after 5 tries "
+                f"({'TRUNCATED at max_output_tokens' if truncated else e}); "
+                f"full response dumped to {dump}"
+            ) from e
         except Exception as e:  # transient overload/disconnect → backoff + retry
             if _synth_transient(e) and attempt < 4:
-                import time as _t
                 _t.sleep(5 * (attempt + 1))
                 continue
             raise
-    raw = util.strip_fences(resp.text or "")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        dump = Path("/tmp/synthesize_failed_response.txt")
-        dump.write_text(raw)
-        finish = getattr(resp.candidates[0], "finish_reason", "?") if resp.candidates else "?"
-        truncated = str(finish) == "MAX_TOKENS"
-        raise RuntimeError(
-            f"Gemini returned invalid JSON "
-            f"({'TRUNCATED at max_output_tokens' if truncated else e}); "
-            f"full response dumped to {dump}"
-        ) from e
 
 
 def _call_presentation(client: genai.Client, p: Presentation,
@@ -528,12 +529,11 @@ def _call_presentation(client: genai.Client, p: Presentation,
         }
 
 
-def _call_thematic(client: genai.Client, alignment: AlignmentResult,
-                   evidence: list[Evidence], role_pool: list[dict],
-                   pres_outputs: list[dict],
-                   system_prompt: str = THEMATIC_SYSTEM_PROMPT) -> dict:
-    # Build compact context: section-summarized transcript with evidence markers
-    ctx_lines = []
+def _build_event_context(alignment: AlignmentResult, evidence: list[Evidence],
+                         cap: int = 140_000) -> str:
+    """Section-summarized transcript with [ev_...] markers — the shared context both the thematic
+    (descriptive) call and the dedicated cognition call cite against, so evidence_ids line up."""
+    ctx_lines: list[str] = []
     transcript_ev = [e for e in evidence if e.kind == "transcript"]
     by_section: list[list[Evidence]] = [[] for _ in alignment.sections]
     for e in transcript_ev:
@@ -548,10 +548,15 @@ def _call_thematic(client: genai.Client, alignment: AlignmentResult,
         )
         for e in evs:
             ctx_lines.append(f"[{e.evidence_id}] {e.speaker_id or '?'}: {e.text}")
-    context = "\n".join(ctx_lines)
     # safety cap (Sonnet 4.6 has 200k context but we have other content too)
-    context = context[:140_000]
+    return "\n".join(ctx_lines)[:cap]
 
+
+def _call_thematic(client: genai.Client, alignment: AlignmentResult,
+                   evidence: list[Evidence], role_pool: list[dict],
+                   pres_outputs: list[dict],
+                   system_prompt: str = THEMATIC_SYSTEM_PROMPT) -> dict:
+    context = _build_event_context(alignment, evidence)
     role_pool_lines = "\n".join(f"- {r['name']}" for r in role_pool)
     sys_prompt = system_prompt.replace("{role_pool}", role_pool_lines)  # no-op if no placeholder
 
@@ -567,6 +572,88 @@ def _call_thematic(client: genai.Client, alignment: AlignmentResult,
         f"present in the EVENT CONTEXT above."
     )
     return _call_gemini_json(client, sys_prompt, user, max_tokens=32000)
+
+
+# ── DEPTH v2: the Profile.synthesize seam (R1) + the dedicated cognition call ──────────────────
+
+@dataclass
+class SynthesisContext:
+    """Everything a profile's ``synthesize`` needs — assembled once by ``synthesize_full`` (the
+    profile-agnostic scaffolding) and handed to the profile. No mode-branch lives in the caller."""
+    client: genai.Client
+    alignment: AlignmentResult
+    evidence: list[Evidence]
+    guest_pres: list[Presentation]
+    deck_text_by_asset: dict
+    reader_domain: str = ""
+    current_work: str = ""
+
+
+def _call_cognition(ctx: "SynthesisContext", claims: Optional[list] = None,
+                    model: Optional[str] = None) -> dict:
+    """The dedicated cognition pass (DEPTH v2). The model is resolved AT CALL TIME from
+    ``COGNITION_MODEL`` (env, after dotenv) → ``claude-*`` routes to the scoped Anthropic caller
+    (Opus 4.8 default), anything else to Gemini (A/B isolation). ``claims`` are the descriptive
+    notable_claims handed in so the cognition call tags THOSE exact claims by evidence_id (so the
+    epistemic overlay actually lands). Degrades to ``{}`` on any failure — the descriptive notes
+    still render, the cognition sections + overlay simply absent."""
+    from src.profiles import lecture
+    from src.contracts import CognitionOutput
+    load_dotenv()                                    # .env COGNITION_MODEL works alongside shell env
+    model = model or os.environ.get("COGNITION_MODEL", COGNITION_MODEL)
+    print(f"  [synthesize] cognition synthesis ({model})…", flush=True)
+    system = lecture.cognition_prompt(ctx.reader_domain, ctx.current_work)
+    context = _build_event_context(ctx.alignment, ctx.evidence)
+    user = (f"=== EVENT CONTEXT (per-section transcript) ===\n{context}\n\n"
+            f"Produce the cognition JSON object now. Every cited evidence_id must be present above.")
+    claim_lines = "\n".join(f"[{c.get('evidence_id')}] {(c.get('text') or '').strip()}"
+                            for c in (claims or []) if c.get("evidence_id"))
+    if claim_lines:
+        user += ("\n\n=== CLAIMS TO TAG (emit one claim_epistemic per claim, keyed by its "
+                 f"evidence_id) ===\n{claim_lines}")
+    try:
+        if model.startswith("claude"):
+            from src import anthropic_caller
+            data = anthropic_caller.call_json(system, user, model=model)
+        else:
+            data = _call_gemini_json(ctx.client, system, user, max_tokens=16000, model=model)
+        return CognitionOutput.model_validate(data).model_dump()
+    except Exception as e:
+        print(f"  [cognition] FAILED ({model}): {type(e).__name__}: {e} — degrading "
+              f"(cognition sections omitted)", flush=True)
+        return {}
+
+
+def briefing_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
+    """The briefing profile owns its synthesis: per-presentation calls + the thematic assembly —
+    **today's code, verbatim** (byte-identical LSIC path; no cognition call)."""
+    role_pool = _load_role_pool(Path("clai/.claude/Behavior/Roles.md"))
+    pres_outputs: list[dict] = []
+    for p in ctx.guest_pres:
+        print(f"  [synthesize] presentation {p.asset_id} ({int(p.start//60):02d}:"
+              f"{int(p.start%60):02d}-{int(p.end//60):02d}:{int(p.end%60):02d})…", flush=True)
+        out = _call_presentation(ctx.client, p, ctx.alignment, ctx.evidence,
+                                 ctx.deck_text_by_asset.get(p.asset_id, ""))
+        out["asset_id"] = p.asset_id
+        out["window_start"] = p.start
+        out["window_end"] = p.end
+        pres_outputs.append(out)
+    print("  [synthesize] thematic synthesis (1 big call)…", flush=True)
+    thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, role_pool, pres_outputs,
+                              system_prompt=THEMATIC_SYSTEM_PROMPT)
+    return thematic, pres_outputs
+
+
+def lecture_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
+    """The lecture profile owns its synthesis: a DESCRIPTIVE thematic call (Gemini) + a dedicated
+    COGNITION call (Opus 4.8 by default), merged. No presentations, no role pool."""
+    from src.profiles import lecture
+    print("  [synthesize] thematic synthesis (descriptive, 1 call)…", flush=True)
+    thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
+                              system_prompt=lecture.thematic_prompt())
+    # hand the descriptive claims to the cognition call so it tags THOSE by evidence_id
+    thematic.update(_call_cognition(ctx, claims=thematic.get("notable_claims") or []))
+    return thematic, []
 
 
 def _select_slide_highlights(captions: list[Caption], n: int = 3) -> list[Caption]:

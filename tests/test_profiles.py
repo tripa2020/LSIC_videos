@@ -136,12 +136,12 @@ def test_call_thematic_uses_profile_system_prompt(monkeypatch):
     assert "LECTURE_MARKER_PROMPT" in captured["system"]
 
 
-# ---------- cognition layer (additive A/B/C/D) ----------
+# ---------- cognition layer (DEPTH v2: descriptive claims + cognition overlay) ----------
 
+# _FULL_THEMATIC already carries the (descriptive) notable_claims — the ev_3 "90% grasp success"
+# claim. The cognition call only adds the overlay + the A/B/D sections.
 _COGNITION = {
     **_FULL_THEMATIC,
-    "notable_claims": [{"text": "90% grasp success", "basis": "200-trial eval",
-                        "status": "his bet", "evidence_id": "ev_3"}],
     "operating_algorithm": {"arrow_chain": "anchor to physics → find the cost floor → bet on the bottleneck",
                             "tags": ["Mechanism", "Constraint"]},
     "cognitive_moves": [
@@ -149,6 +149,9 @@ _COGNITION = {
          "work": "collapses 'inefficient' into the specific failure", "evidence_id": "ev_1"},
         {"move": "memory is a bug", "tag": "Inversion",
          "work": "flips more-is-better to force generalization", "evidence_id": "ev_2"}],
+    # epistemic OVERLAY keyed by evidence_id — matches the descriptive ev_3 claim
+    "claim_epistemics": [{"evidence_id": "ev_3", "status": "his bet",
+                          "when_it_fails": "when the eval set is too small to be representative"}],
     "what_doesnt_transfer": "the timelines are bets; the decompositions are durable",
     "transfer_questions": [
         {"prompt": "Where do I judge a long run by one pass/fail?", "from_move": "reward is a straw",
@@ -166,8 +169,9 @@ def test_lecture_render_cognition_sections_present():
     # B — Cognitive Moves: move · tag · work · grounded cite
     assert "## Cognitive Moves" in md
     assert "**reward is a straw** — *Mechanism* —" in md and "`[00:12]`" in md
-    # C — inline status tag + the closing "what doesn't transfer" line
-    assert "`[his bet]`" in md
+    # C — epistemic OVERLAY matched to the descriptive ev_3 claim by evidence_id
+    assert "90% grasp success" in md and "`[his bet]`" in md
+    assert "↳ *fails when:* when the eval set is too small" in md
     assert "**What doesn't transfer:** the timelines are bets" in md
     # D — Transfer Questions, with from-move attribution
     assert "## Transfer Questions" in md and "one pass/fail?" in md
@@ -178,22 +182,45 @@ def test_lecture_render_cognition_sections_present():
 
 
 def test_lecture_cognition_omitted_when_absent():
-    # no cognition fields → additive sections vanish entirely (degrade-to-today), existing intact
+    # no cognition fields / no claim_epistemics → cognition sections vanish; claims render UNTAGGED
     md = lecture.render_lecture(ing=_ing(), alignment=_align(), pres_outputs=[],
                                 thematic=_FULL_THEMATIC, slide_highlights=[], evidence_by_id=_EV,
                                 event_date="2026-06-11", n_speakers=1, source_meta=None)
     for h in ["## Operating Algorithm", "## Cognitive Moves", "## Transfer Questions",
-              "**What doesn't transfer:**"]:
+              "**What doesn't transfer:**", "↳ *fails when:*", "`[his bet]`"]:
         assert h not in md
-    assert "## Summary" in md and "## Notable Claims & Evidence" in md
+    # the descriptive claim still renders, just without the epistemic tag
+    assert "## Summary" in md and "90% grasp success" in md
 
 
-def test_thematic_prompt_reader_domain(monkeypatch):
+def test_lecture_render_orphan_epistemic_surfaced():
+    # a cognition epistemic whose evidence_id matches NO descriptive claim must NOT vanish silently
+    th = {**_FULL_THEMATIC,
+          "claim_epistemics": [{"evidence_id": "ev_unmatched", "status": "contested",
+                                "when_it_fails": "in low-data regimes"}]}
+    md = lecture.render_lecture(ing=_ing(), alignment=_align(), pres_outputs=[],
+                                thematic=th, slide_highlights=[], evidence_by_id=_EV,
+                                event_date="2026-06-11", n_speakers=1, source_meta=None)
+    assert "90% grasp success" in md                              # descriptive claim still renders
+    assert "*(epistemic note)* `[contested]`" in md              # orphan surfaced, analysis kept
+    assert "↳ *fails when:* in low-data regimes" in md
+
+
+def test_cognition_prompt_reader_domain(monkeypatch):
     monkeypatch.delenv("READER_DOMAIN", raising=False)
-    p_none = lecture.thematic_prompt()
+    monkeypatch.delenv("CURRENT_WORK", raising=False)
+    # the DESCRIPTIVE prompt is reader-agnostic and NO cognition field may leak into it (else the
+    # crowding-out the split prevents creeps back)
+    desc = lecture.thematic_prompt()
+    assert "READER DOMAIN" not in desc
+    for fld in ("operating_algorithm", "cognitive_moves", "claim_epistemics",
+                "what_doesnt_transfer", "transfer_questions"):
+        assert fld not in desc, f"{fld} leaked into the descriptive prompt"
+    # the COGNITION prompt threads reader_domain (+ current_work → project-level)
+    p_none = lecture.cognition_prompt()
     assert "empty transfer_questions list" in p_none
-    # base cognition schema is always present, reader_domain or not
-    assert "operating_algorithm" in p_none and "cognitive_moves" in p_none
-    monkeypatch.setenv("READER_DOMAIN", "embedded / robotics")
-    p_rd = lecture.thematic_prompt()
-    assert "READER DOMAIN: embedded / robotics" in p_rd and "transfer_questions" in p_rd
+    assert "operating_algorithm" in p_none and "claim_epistemics" in p_none
+    p_rd = lecture.cognition_prompt("embedded / robotics")
+    assert "READER DOMAIN: embedded / robotics" in p_rd
+    p_cw = lecture.cognition_prompt("robotics", "my Teensy firmware bring-up")
+    assert "PROJECT-level" in p_cw and "Teensy firmware" in p_cw
