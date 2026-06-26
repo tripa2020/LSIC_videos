@@ -3,6 +3,12 @@
 _The living source of truth for the first cloud production batch. Kept synced to the code.
 Frozen provenance: `CLOUD_BATCH_DESIGN_RATIONALE.md`._
 
+> 📦 **Record of the built system (Parts 1–2 DONE, validated on the 5-event slice).** The
+> **unfinished tail** — the 122-event run (M-F2) plus its two open bugs (the `run_corpus.sh`
+> event-drop and the ingest whole-command retry) — is now owned by
+> [`SYNTH_QUALITY_PLAN.md`](SYNTH_QUALITY_PLAN.md) as the **FIX** and **BATCH** milestones
+> (scheduled last, after the synthesis-quality work). Drive the 122-run from there.
+
 ## Intro
 
 - **Goal.** Run the validated LSIC Event→Briefing pipeline in the cloud over the
