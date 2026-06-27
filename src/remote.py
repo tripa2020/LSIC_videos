@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from datetime import date
 from pathlib import Path
 
@@ -89,6 +90,22 @@ def start_vm(runner) -> None:
     if vm_status(runner) != "RUNNING":
         print(f"[remote] starting {VM}…", flush=True)
         _run(runner, ["gcloud", "compute", "instances", "start", VM, "--zone", ZONE])
+
+
+def wait_for_ssh(runner, attempts: int = 20, delay: int = 6) -> None:
+    """Poll a trivial ssh until the freshly-started VM accepts connections (sshd + IAP tunnel + key
+    propagation all ready). `gcloud ssh` returns 255 for ~30-90s after `instances start` while the
+    guest boots — without this gate the first bootstrap ssh races the boot and aborts the whole run
+    (the cold-start failure mode). A warm VM passes on the first probe (~1s)."""
+    for i in range(attempts):
+        try:
+            _ssh(runner, "echo ok")
+            return
+        except Exception:
+            if i == attempts - 1:
+                raise
+            print(f"[remote] waiting for {VM} ssh to come up… ({i + 1}/{attempts})", flush=True)
+            time.sleep(delay)
 
 
 def bootstrap_vm(runner) -> None:
@@ -180,6 +197,7 @@ def remote_run(source: str, *, out=None, profile: str | None = None,
     try:
         ensure_vm(runner)
         start_vm(runner)
+        wait_for_ssh(runner)
         bootstrap_vm(runner)
         sync_code(runner)
         print(f"[remote] running {source} on {VM}…", flush=True)

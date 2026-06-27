@@ -22,6 +22,7 @@ def _classify(cmd) -> str:
     if "instances describe" in s:      return "describe"
     if "instances start" in s:         return "start"
     if "instances stop" in s:          return "stop"
+    if "echo ok" in s:                 return "sshprobe"   # post-start ssh-readiness poll
     if "scp" in s and ".lsic_env" in s: return "antscp"     # ANTHROPIC top-up file (before envpush)
     if "scp" in s and ".env" in s:     return "envpush"
     if "scp" in s:                     return "scp"
@@ -36,11 +37,13 @@ def _classify(cmd) -> str:
 
 class FakeRunner:
     """Records each gcloud call as a classified op; returns canned describe status + env state."""
-    def __init__(self, status="RUNNING", fail_on=None, have_env=True, have_ant=True):
+    def __init__(self, status="RUNNING", fail_on=None, have_env=True, have_ant=True, probe_fail=0):
         self.status = status
         self.fail_on = fail_on
         self.have_env = have_env
         self.have_ant = have_ant
+        self.probe_fail = probe_fail
+        self._probes = 0
         self.ops: list[str] = []
         self.cmds: list[str] = []
 
@@ -50,6 +53,9 @@ class FakeRunner:
         self.cmds.append(" ".join(map(str, cmd)))
         if op == self.fail_on:
             raise RuntimeError("boom")
+        if op == "sshprobe" and self._probes < self.probe_fail:
+            self._probes += 1
+            raise subprocess.CalledProcessError(255, cmd)    # VM not ssh-ready yet
         if op == "describe":
             out = self.status
         elif op == "envcheck":
@@ -127,6 +133,24 @@ def test_ssh_targets_pinned_user():
     assert ssh_cmds and all(target in c for c in ssh_cmds)   # every ssh goes in as SSH_USER@VM
     # instance lifecycle ops use the bare instance name, never user@
     assert all(target not in c for c in r.cmds if "instances " in c)
+
+
+# --- ssh-readiness gate (cold-start race) ---
+
+def test_waits_for_ssh_before_bootstrap(monkeypatch):
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="TERMINATED", probe_fail=2)   # first 2 ssh probes 255, 3rd succeeds
+    remote.remote_run("https://youtu.be/x", out=None, runner=r)
+    assert r.ops.count("sshprobe") >= 3                 # retried through the boot window
+    assert r.ops.index("sshprobe") < r.ops.index("bootstrap")   # gate precedes bootstrap
+
+
+def test_ssh_probe_exhaustion_still_stops_vm(monkeypatch):
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="TERMINATED", probe_fail=999)  # never comes up
+    with pytest.raises(Exception):
+        remote.remote_run("https://youtu.be/x", out=None, runner=r)
+    assert r.ops[-1] == "stop"                           # finally still stopped the VM
 
 
 # --- ANTHROPIC key top-up (Opus cognition) ---
