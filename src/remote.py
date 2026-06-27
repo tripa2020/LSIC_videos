@@ -25,7 +25,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from datetime import date
 from pathlib import Path
+
+from src import util
 
 VM = os.environ.get("LSIC_VM", "lsic-batch")
 ZONE = os.environ.get("LSIC_ZONE", "us-central1-a")
@@ -33,7 +36,14 @@ SSH_USER = os.environ.get("LSIC_SSH_USER", "user")
 REPO_URL = os.environ.get("LSIC_REPO_URL", "https://github.com/tripa2020/LSIC_videos.git")
 REMOTE_REPO = f"/home/{SSH_USER}/LSIC_videos"
 REMOTE_OUT = f"/home/{SSH_USER}/_lsic_out"
+REMOTE_TMP_ENV = "/tmp/.lsic_env"
 LOCAL_ENV = Path(__file__).resolve().parent.parent / ".env"
+
+
+def _local_env_has(key: str) -> bool:
+    """True if the local .env defines ``key`` — so we only try to ship keys we actually hold."""
+    return LOCAL_ENV.is_file() and any(
+        ln.strip().startswith(f"{key}=") for ln in LOCAL_ENV.read_text().splitlines())
 
 
 def _run(runner, cmd: list[str], **kw):
@@ -83,31 +93,60 @@ def start_vm(runner) -> None:
 
 def bootstrap_vm(runner) -> None:
     """Make the VM ready, idempotently: clone the repo if absent, build the venv if absent, and
-    push the local .env if the VM lacks a Gemini key. A ready VM does no work (all gated)."""
+    ensure the VM's .env carries the keys the pipeline needs — GEMINI (ASR/VLM/synth) via a cold
+    whole-file push when the VM has no .env, and ANTHROPIC (the Opus cognition call) via an
+    append-only top-up when the VM has a .env but lacks that key. Never clobbers a VM .env that
+    already has the key; a fully-provisioned VM does no work (all gated)."""
     print(f"[remote] bootstrapping {SSH_USER}@{VM} (repo/venv/.env if missing)…", flush=True)
     _ssh(runner,
          f"test -d {REMOTE_REPO} || git clone {REPO_URL} {REMOTE_REPO}; "
          f"git config --global --add safe.directory {REMOTE_REPO}; "
          f"test -x {REMOTE_REPO}/.venv/bin/python || (cd {REMOTE_REPO} && ./infra/vm_setup.sh)")
-    # .env: push the local key up only if the VM doesn't already have one (don't clobber).
+    # GEMINI (cold start): push the whole local .env only if the VM has none (don't clobber).
     cp = _ssh(runner,
               f"grep -q GEMINI_API_KEY {REMOTE_REPO}/.env 2>/dev/null && echo HAVE_ENV || echo NO_ENV")
     if "NO_ENV" in (cp.stdout or "") and LOCAL_ENV.is_file():
         print("[remote] pushing local .env (VM had none)…", flush=True)
         _run(runner, ["gcloud", "compute", "scp", "--tunnel-through-iap", "--zone", ZONE,
                       str(LOCAL_ENV), f"{SSH_USER}@{VM}:{REMOTE_REPO}/.env"])
+    # ANTHROPIC (warm top-up): the Opus cognition call (COGNITION_MODEL=claude-*) needs this key. A
+    # VM provisioned before DEPTH v2 has a .env with only the Gemini key → append JUST this key (its
+    # value travels in the scp'd file, never in an ssh argv) so the Opus A/B doesn't silently degrade
+    # to empty cognition. Skipped when the VM already has it or the local .env lacks it.
+    ant = _ssh(runner,
+               f"grep -q ANTHROPIC_API_KEY {REMOTE_REPO}/.env 2>/dev/null && echo HAVE_ANT || echo NO_ANT")
+    if "NO_ANT" in (ant.stdout or "") and _local_env_has("ANTHROPIC_API_KEY"):
+        print("[remote] appending ANTHROPIC_API_KEY to VM .env (for the Opus cognition call)…", flush=True)
+        _run(runner, ["gcloud", "compute", "scp", "--tunnel-through-iap", "--zone", ZONE,
+                      str(LOCAL_ENV), f"{SSH_USER}@{VM}:{REMOTE_TMP_ENV}"])
+        _ssh(runner, f'grep "^ANTHROPIC_API_KEY=" {REMOTE_TMP_ENV} >> {REMOTE_REPO}/.env '
+                     f'&& rm -f {REMOTE_TMP_ENV}')
 
 
 def sync_code(runner) -> None:
-    """Fast-forward the VM's clone to origin/main and refresh deps (picks up new requirements)."""
-    _ssh(runner, f"cd {REMOTE_REPO} && git fetch -q origin main && git reset -q --hard origin/main "
+    """Fast-forward the VM's clone to ``origin/<branch>`` and refresh deps (picks up new
+    requirements). ``branch`` = env ``LSIC_BRANCH`` (default ``main``) — the knob that lets a
+    feature branch be verified on the VM before it merges to main."""
+    branch = os.environ.get("LSIC_BRANCH", "main")
+    _ssh(runner, f"cd {REMOTE_REPO} && git fetch -q origin {branch} "
+                 f"&& git reset -q --hard origin/{branch} "
                  f"&& ./.venv/bin/pip install -q -r requirements.txt")
 
 
 def run_remote_job(runner, source: str, profile: str | None = None) -> None:
     prof = f" --profile {profile}" if profile else ""
+    # LSIC_REDO_BRIEFING: clear the briefing stage for THIS event so synthesis re-runs with the
+    # freshly-synced code — the stage is idempotent, so a cached notes.md would otherwise skip it.
+    # Upstream (ingest/transcribe/visual/align) stays cached ⇒ only the cheap synth re-runs.
+    prep = ""
+    if os.environ.get("LSIC_REDO_BRIEFING"):
+        from src.adhoc import mint_event_id
+        eid = mint_event_id(None, source, date.today())
+        stage_dir = f"work/events/{eid}/{util.STAGE_BRIEFING}"
+        prep = f"rm -rf {stage_dir} && "
+        print(f"[remote] redo: clearing {stage_dir} so synth re-runs…", flush=True)
     _ssh(runner,
-         f"cd {REMOTE_REPO} && rm -rf {REMOTE_OUT} && "
+         f"cd {REMOTE_REPO} && {prep}rm -rf {REMOTE_OUT} && "
          f"PY=./.venv/bin/python ./.venv/bin/python -m src.main "
          f"--source '{source}'{prof} --out {REMOTE_OUT}",
          timeout=None)
