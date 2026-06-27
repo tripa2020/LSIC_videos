@@ -1,9 +1,14 @@
 # SYNTH_QUALITY — Durable PLAN
 
+> 🟢 **ACTIVE PLAN — this is the plan currently being worked on (as of 2026-06-26).**
+> **Build order (re-prioritized 2026-06-26):** **MAPRED → FIX → EVAL → RUNEASY** (then BATCH).
+> BASE + DEPTH v1/v2 already shipped. **MAPRED is the immediate build target.** RUNEASY = a
+> one-command list/playlist → `--remote` batch front door (new milestone, scoped below).
+
 _The living source of truth for the reprioritized quality-first roadmap. Kept synced to the
 code. Frozen provenance: `SYNTH_QUALITY_DESIGN_RATIONALE.md`. **Supersedes** `SYNTH_V2_PLAN.md`
 (design-only) and owns the unfinished tail of `CLOUD_BATCH_PLAN.md` (the 122-run + 2 bugs).
-Status as of 2026-06-25: **planned — awaiting "code it".**_
+Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED → FIX → EVAL → RUNEASY next.**_
 
 ## Intro
 
@@ -19,15 +24,15 @@ Status as of 2026-06-25: **planned — awaiting "code it".**_
 - **Core abstraction.** **Map-reduce with single-producer-per-section, owned per Profile**
   (carried from SYNTH_V2). MAP extracts *local* facts per map-unit; REDUCE produces *every
   global section once* over the evidence union. Map-unit is profile-specific: `briefing` maps
-  over presentations (today's code, verbatim); `lecture` maps over chapters (new). The same
+  over presentations (today's code, verbatim); `lecture` maps over **size/token-bounded windows** (new — sized to the context budget, *not* author chapters). The same
   `[mm:ss]` grounding measures coherence (cite-spread) and coverage. The default path stays
   **byte-identical**.
 
 ```
-BASE ──► EVAL ──► DEPTH ──► MAPRED ──► FIX ──► BATCH
-freeze    pure      sub-      chapter    2 bugs   122-run
-A/B ref   scorer    fields    map-reduce          (briefing)
-        (PART 1 — synthesis quality)        (PART 2 — ship)
+[✓BASE] [✓DEPTH v1/v2] ──► MAPRED ──► FIX ──► EVAL ──► RUNEASY ──► BATCH
+ freeze  cognition          chapter    2 bugs  pure      list/PL →   122-run
+ A/B ref layer              map-reduce         scorer    --remote    (briefing)
+                  (re-prioritized 2026-06-26 — long-video synthesis win first)
 ```
 
 ---
@@ -36,14 +41,14 @@ A/B ref   scorer    fields    map-reduce          (briefing)
 
 | Decision               | Choice                                                              | Rationale                                                                          | Date       |
 | ---------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ---------- |
-| Priority order         | BASE → EVAL → DEPTH → MAPRED → FIX → BATCH                          | Quality-first; the YouTube path matters now, the batch is built bar 2 bugs          | 2026-06-25 |
+| Priority order (rev)   | MAPRED → FIX → EVAL → RUNEASY → BATCH (BASE + DEPTH v1/v2 done)      | Re-prioritized 2026-06-26: land the long-video synthesis win, harden the driver, measure, then make multi-video runs one-command | 2026-06-26 |
 | Baseline run           | `--source --profile lecture --references --remote`, frozen as A/B   | Real "before" anchors the eval; `--remote` offloads heavy ASR/VLM                  | 2026-06-25 |
 | Synthesis ownership R1 | `Profile.synthesize(ctx)`; briefing = today's code **verbatim**     | No mode-branch; LSIC byte-identical; map-reduce scoped to `lecture`                 | 2026-06-25 |
 | Cognition decomposition | DEPTH v2 = **additive, lecture-scoped dedicated cognition call** (descriptive call unchanged; cognition fields move to a 2nd focused call merged before render) | v1's crowded single call under-resourced the inferential cognition fields; additive keeps briefing byte-identical and the descriptive lecture call unchanged (honors "augment not refactor") | 2026-06-25 |
 | Cognition synth model | **`COGNITION_MODEL` knob, default `claude-opus-4-8`** (Opus 4.8) via a scoped `anthropic_caller`; descriptive call stays `gemini-2.5-pro`; the 122 LSIC briefing batch stays single-backend Gemini | The cognition fields are a *reasoning* task (idiosyncratic signature, epistemics, boundary conditions) where a frontier model earns its keep; one bounded call/talk so cost is trivial (~$0.15 batched). Knob enables A/B: `COGNITION_MODEL=gemini-2.5-pro` reproduces an all-Gemini run | 2026-06-25 |
 | Anthropic dep re-add | Re-introduce `anthropic` SDK, **scoped to the lecture cognition call only** | CLOUD_BATCH dropped it for batch unification; scoping keeps the Gemini Batch path untouched. `anthropic_caller` imports the SDK lazily (module import is dep-free → fakes-only tests need no install) | 2026-06-25 |
 | EVAL purity R2/R3      | Pure deterministic, reads structured reduce JSON, no LLM            | CI-able guardrail decoupled from render; LLM judge deferred (critic pass dropped)  | 2026-06-25 |
-| Map-unit R1            | briefing→presentation (today), lecture→chapter                     | Generalize the pattern LSIC already uses; don't replace it                          | 2026-06-25 |
+| Map-unit (rev)         | briefing→presentation (today); lecture→**size/token window** (NOT author chapters) | Map-reduce targets the *context-size* constraint (140k truncation / lost-in-middle), which scales with video length — not where the uploader drew chapter marks. Uniform windowing also kills the no-chapter edge | 2026-06-26 |
 | Segmenter contract R5  | `segment()` always returns ≥1 unit                                 | No-chapters edge defined out of existence; downstream uniform                       | 2026-06-25 |
 | SYNTH scope            | EVAL + DEPTH + MAPRED only                                          | Stop before the LLM critic→revise pass (old M-S4); measured map-reduce win is enough | 2026-06-25 |
 | 122 independence       | BATCH uses briefing profile → unaffected by PART 1                  | Map-reduce touches only `lecture`; FIX is the only real blocker for the 122         | 2026-06-25 |
@@ -74,9 +79,12 @@ A/B ref   scorer    fields    map-reduce          (briefing)
 | ---- | --------------------------------------------------------------------------------- | --------- | ---------- |
 | ~~OQ1~~ | ✅ RESOLVED (2026-06-25) — **no code fix needed.** `--remote` doesn't forward the `--references` flag, but the VM job runs `src.main --source …` which routes to `adhoc.run_adhoc` ([src/adhoc.py:137](../src/adhoc.py)) that **hardcodes `references=True`** for any `--source` run. So the remote BASE bundle gets `references.md` automatically. The real prerequisite is **gcloud install + GCP auth + VM verification** (not configured on this device — VM was provisioned elsewhere). | — | done |
 | ~~OQ2~~ | ✅ RESOLVED — `lXUZvyajciY` is the **Karpathy "Digital Ghosts" talk, 146 min, chaptered, 7 speakers** → ideal MAPRED sample (long+chaptered). BASE citations reach `[117:08]`, so the lecture single-call didn't *visibly* truncate late content; EVAL will quantify actual coverage. | — | done |
-| OQ3  | Duration threshold for auto map-reduce (e.g. >45 min)?                            | Commander | MAPRED     |
+| ~~OQ3~~ | ✅ RESOLVED 2026-06-26 — no duration threshold; auto map-reduce iff size-windowing yields **≥2 windows** (evidence text > `WINDOW_BUDGET`). | — | done |
 | OQ4  | Cross-chapter-ratio threshold for the CI coherence guardrail                      | data      | EVAL (from BASE baseline) |
 | OQ5  | 122-run $ ceiling (CLOUD_BATCH OQ3 default ~$75–100 batch-priced)                 | Commander | BATCH      |
+| OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs?          | Commander | RUNEASY    |
+| OQ7  | RUNEASY: emit a single results index (table of all bundles) or per-video folders?  | Commander | RUNEASY    |
+| OQ8  | MAPRED: `WINDOW_BUDGET` default (per-window char/token budget) — tune via A/B vs golden | data      | MAPRED     |
 
 ### Deliverable / Output Contract
 
@@ -97,7 +105,7 @@ LSIC_videos/
 ├── golden/
 │   └── <id>_baseline/        NEW   frozen A/B "before" bundle (BASE)
 ├── src/
-│   ├── segment.py            NEW ≤80   map-units: meta.chapters | auto → ALWAYS ≥1 (R5)         [MAPRED]
+│   ├── segment.py            NEW ≤80   map-units: SIZE/token windows over evidence → ALWAYS ≥1 (R5) [MAPRED]
 │   ├── synth_mapreduce.py    NEW ≤180  MAP (per-unit extract) → REDUCE (single-producer)        [MAPRED]
 │   ├── synth_eval.py         NEW ≤120  PURE deterministic scorer; reads structured JSON (R2/R3) [EVAL]
 │   ├── profiles/__init__.py  MOD +≤15  Profile gains deep method `synthesize(ctx)` (R1)         [MAPRED]
@@ -162,7 +170,10 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   Cognitive Moves strong; Operating Algorithm generic (talk-outline failure); epistemic/transfer
   thin → drives v2.
 
-- [ ] **DEPTH v2 — Cognition refinement (dedicated call + 4 fixes)** — *root cause of v1 weakness:*
+- [x] **DEPTH v2 — Cognition refinement (dedicated call + 4 fixes) — SHIPPED 2026-06-25**
+  (commits `9c2537f` / `0e1cf2f` / `23a71c7`: `src/anthropic_caller.py`, `_call_cognition` +
+  `COGNITION_MODEL=claude-opus-4-8`, `when_it_fails` + per-move `transfer_questions` + `CURRENT_WORK`;
+  A/B bundles `golden/lXUZvyajciY_v2_{gemini,opus}/`; `tests/test_cognition.py`). *Root cause of v1 weakness:*
   the 4 inferential cognition fields share ONE crowded call with ~13 descriptive fields (last in the
   schema → least attention) and the prompt is example-free. Fixes:
   1. **Dedicated cognition call (additive, lecture-scoped) + model knob** — the cognition fields
@@ -185,7 +196,7 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   grounding; briefing byte-identical) **+** A/B the regenerated lecture vs DEPTH-v1 by eye against the
   gold (EVAL scores groundedness but not "idiosyncrasy" — that stays a human/critic check).
 
-- [ ] **MAPRED — profile-owned synthesis + lecture map-reduce** (was M-S2; R1/R5) — introduce
+- [~] **MAPRED — profile-owned synthesis + lecture map-reduce** (CODE SHIPPED 2026-06-26; R1/R5) — introduce
   `Profile.synthesize(ctx)`. **First** move `briefing.synthesize` = today's per-presentation +
   thematic code **VERBATIM** (proves LSIC byte-identical, no mode-branch). Then
   `lecture.synthesize` = `segment.py` (R5) + `synth_mapreduce.py`: MAP extracts local facts per
@@ -196,15 +207,65 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   fake LLM map+reduce with single-producer asserted (chapters emit NO summary/lens/outlook) **+**
   on the BASE video (or a 2nd long sample, OQ2): no truncation, `cross_chapter_ratio ≥ OQ4`,
   coherence ≥ BASE on the A/B.
+  - **⚙ Build context (mapped + verified 2026-06-26 — scope REDUCED):** the `Profile.synthesize(ctx)`
+    seam **and** the briefing-verbatim move are **ALREADY DONE** — `synthesize_full` dispatches at
+    [synthesize.py:371] `thematic, pres_outputs = prof.synthesize(ctx)`; `briefing_synthesize`
+    ([synthesize.py:627-644]) + `lecture_synthesize` ([synthesize.py:647-656]) are wired as `Profile`
+    callables ([profiles/__init__.py:38,44]). So MAPRED collapses to **3 moves**: **(1)** NEW
+    `src/segment.py` `segment(evidence, budget_chars) -> windows` — **SIZE/token windowing, NOT author
+    chapters** (decision 2026-06-26): sort evidence by `timestamp_start`, greedily accumulate until the
+    window's text would exceed `budget_chars` (≈ tokens×4; env `WINDOW_BUDGET`), then close; each window
+    `= (idx, start_sec, end_sec, evidence_subset)`; total ≤ budget ⇒ 1 window (always ≥1). Window count
+    scales with **video length** — the real constraint — not where the uploader drew chapter marks
+    (`meta["chapters"]` is now **irrelevant** to synthesis). **(2)** NEW `src/synth_mapreduce.py` — MAP
+    each window's evidence subset (per-window `_build_event_context`) → REDUCE once (single-producer;
+    reuse the lecture thematic keys + `tensions`). **(3)** rewire **only** the `_call_thematic` at
+    [synthesize.py:652] inside `lecture_synthesize`; `_call_cognition` ([:655]) and `briefing_synthesize`
+    stay untouched. Removes the 140k ceiling (`_build_event_context`, [synthesize.py:532-552]) for lecture.
+    **Gaps eliminated by size-windowing:** no-chapter / non-YouTube / long-non-chaptered edges all vanish —
+    every input is windowed uniformly, nothing truncates. **Auto-select (OQ3 RESOLVED):** map-reduce iff
+    `len(windows) ≥ 2` (evidence text > `WINDOW_BUDGET`), else today's single call (degrade-to-today).
+    Open: `WINDOW_BUDGET` default — tune via A/B vs `golden/` (OQ8). Test seam: monkeypatch
+    `synthesize._call_thematic` per window (existing fakes pattern, `tests/test_cognition.py` `_ctx()`).
+    EVAL comes after ⇒ A/B by eye vs `golden/` bundles.
+  - **✅ Code SHIPPED 2026-06-26 on `alex/mapred-windows`:** `src/segment.py` (size windowing) +
+    `src/synth_mapreduce.py` (MAP→REDUCE, single-producer, injected `call_json` ⇒ no import cycle)
+    + the window-gated branch in `lecture_synthesize` ([synthesize.py:647]). **Gates:** 144 pytest
+    green (new `test_segment.py` ×7 + `test_synth_mapreduce.py` ×6 — single-producer, map-once/
+    reduce-once-over-union, map-failure degrade, ≥2-window routing vs ≤1-window single call) +
+    `--selftest` OK; briefing + ≤1-window lecture byte-identical. **Scope notes:** `tensions` field
+    **deferred** (needs a new lecture render section — beyond this minimal rewire); the dedicated
+    **cognition call stays single-pass** (still 140k-capped — separate follow-up). **Before merge:**
+    a live A/B-by-eye on a long lecture vs `golden/` (the eval-lift check; EVAL milestone next).
 
 ### PART 2 — Ship at scale (CLOUD_BATCH tail; independent of PART 1)
 
-- [ ] **FIX — corpus driver + ingest retry** — (a) `run_corpus.sh`: make `run_one` trap failures,
-  log `❌ <event>`, and `exit 0` so `xargs -P` never sees a 255 and never aborts the batch; tally
-  failures at the end. (b) `ingest.py`: wrap `_fetch_youtube`/`_fetch_http` in `util.retry_transient`
-  (exists, [src/util.py:174]).
+- [~] **FIX — corpus driver + ingest retry** (PARTIAL as of 2026-06-26) — (a) `run_corpus.sh`:
+  make `run_one` trap failures, log `❌ <event>`, and `exit 0` so `xargs -P` never sees a 255 and
+  never aborts the batch; tally failures at the end. (b) `ingest.py`: wrap
+  `_fetch_youtube`/`_fetch_http` in `util.retry_transient` (exists, [src/util.py:174]).
+  **Status:** the ✅/❌ trap is ALREADY in `run_one` ([run_corpus.sh:69-75]) → the no-drop half
+  looks done in code (needs a real run to confirm); the end-of-run tally still greps `"report OK"`
+  ([run_corpus.sh:86]) instead of counting ✅/❌. Remaining: **ingest retry NOT done**;
+  `test_corpus_driver.py` **not written**.
   *Gate:* `/python-unit-tests` — `test_corpus_driver`: a failing event does NOT drop the rest;
   ingest retries a transient non-zero exit then succeeds.
+
+- [ ] **RUNEASY — one-command multi-video front door** (NEW 2026-06-26; depends on FIX) — make
+  running "a bunch of videos" a single short command. **Scoping (answered 2026-06-26):**
+  - *Input:* a **list of URLs** (file, one per line) **and YouTube playlist/channel** URLs
+    (auto-expanded to member videos via `yt-dlp --flat-playlist`). Arbitrary URLs route through the
+    existing `--source` adhoc path — **NOT** the LSIC catalog machinery
+    (`group_manifest`/`fetch_docs`/`topic_filter`).
+  - *Run target:* **`--remote` by default** (offload heavy ASR/VLM to the GCP VM); a `--local` opt-out.
+  - *Kill these frictions:* (1) **no list→batch front door** — today you hand-loop `--source` per URL;
+    (2) **too many flags** — bake `--profile lecture --references --cap-video-hours 4` into the front door.
+  - *Shape:* extend `run_corpus.sh` (or a thin sibling) to accept a URL/playlist list, expand playlists,
+    loop `--source <url> --remote` with baked defaults, reuse FIX's no-drop + tally, collect `Report/`
+    bundles. Open: per-video VM job vs one VM looping all (OQ6); results index (OQ7).
+  - *Degrade-to-today:* catalog-id input still runs today's exact path; URL input is the new branch.
+  *Gate:* `/python-unit-tests` — playlist expansion + URL-vs-catalog routing on fakes (no network);
+  the existing catalog path stays byte-identical. **+** a real 2–3 URL `--remote` smoke run end-to-end.
 
 - [ ] **BATCH — the 122-event run** (was CLOUD_BATCH M-F2) — `run_corpus.sh filter` over the
   122 video-bearing events, 4h cap applied, `--dry-run` cost gate per event, stop on $ ceiling
@@ -218,14 +279,16 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
 ### Dependency graph + build order
 
 ```
-BASE (freeze ref) ──► EVAL (scorer; baseline from BASE) ──► MAPRED (must beat BASE on EVAL)
-                          └─ DEPTH (independent; on today's monolith; carried into map schema)
-FIX (driver + ingest retry) ──► BATCH (122-run)      [PART 2: parallel-able once FIX lands]
+DONE: BASE (frozen A/B ref) · DEPTH v1/v2 (cognition layer)
+MAPRED (chapter map-reduce; beat BASE on the A/B) ──► FIX (driver no-drop + ingest retry)
+   ──► EVAL (pure scorer; retro-scores MAPRED) ──► RUNEASY (list/playlist → --remote) ──► BATCH (122-run)
 ```
-Build order **BASE → EVAL → DEPTH → MAPRED → FIX → BATCH**. Each: own branch
-`alex/<short-desc>`, degrade-to-today (default monolith = byte-identical), fakes-only tests
-green, **eval lift measured over the BASE reference** before merging any LLM-behavior change,
-merged only when green + verified.
+Build order **MAPRED → FIX → EVAL → RUNEASY → BATCH** (re-prioritized 2026-06-26). Each: own
+branch `alex/<short-desc>`, degrade-to-today (default monolith = byte-identical), fakes-only tests
+green, merged only when green + verified.
+**Caveat (eval-first tension):** MAPRED now lands BEFORE EVAL, so during MAPRED there is no
+deterministic scorer — lift is judged **by eye against the frozen golden bundles**
+(`golden/lXUZvyajciY_{baseline,v2_opus,v2_gemini}/`). EVAL retro-scores MAPRED immediately after.
 
 ### Module ownership (new code)
 

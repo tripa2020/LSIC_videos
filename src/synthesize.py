@@ -645,12 +645,24 @@ def briefing_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
 
 
 def lecture_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
-    """The lecture profile owns its synthesis: a DESCRIPTIVE thematic call (Gemini) + a dedicated
-    COGNITION call (Opus 4.8 by default), merged. No presentations, no role pool."""
+    """The lecture profile owns its synthesis: a DESCRIPTIVE thematic pass (Gemini) + a dedicated
+    COGNITION call (Opus 4.8 by default), merged. No presentations, no role pool.
+
+    MAPRED: on a LONG talk (transcript > WINDOW_BUDGET ⇒ ≥2 size-bounded windows) the descriptive
+    pass is map-reduced — each window extracts local facts, then one REDUCE weaves every global
+    section once — which removes the 140k single-call truncation. A short talk (≤1 window) takes
+    today's single call, byte-identical (degrade-to-today). The cognition call is unchanged."""
     from src.profiles import lecture
-    print("  [synthesize] thematic synthesis (descriptive, 1 call)…", flush=True)
-    thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
-                              system_prompt=lecture.thematic_prompt())
+    from src import segment as _segment
+    windows = _segment.segment(ctx.evidence)
+    if len(windows) >= 2:
+        from src import synth_mapreduce
+        thematic = synth_mapreduce.mapreduce_thematic(
+            ctx.client, windows, lecture.thematic_prompt(), _call_gemini_json)
+    else:
+        print("  [synthesize] thematic synthesis (descriptive, 1 call)…", flush=True)
+        thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
+                                  system_prompt=lecture.thematic_prompt())
     # hand the descriptive claims to the cognition call so it tags THOSE by evidence_id
     thematic.update(_call_cognition(ctx, claims=thematic.get("notable_claims") or []))
     return thematic, []
