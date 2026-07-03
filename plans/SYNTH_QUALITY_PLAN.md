@@ -196,7 +196,7 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   grounding; briefing byte-identical) **+** A/B the regenerated lecture vs DEPTH-v1 by eye against the
   gold (EVAL scores groundedness but not "idiosyncrasy" — that stays a human/critic check).
 
-- [~] **MAPRED — profile-owned synthesis + lecture map-reduce** (CODE SHIPPED 2026-06-26; R1/R5) — introduce
+- [x] **MAPRED — profile-owned synthesis + lecture map-reduce** (VERIFIED 2026-06-27; R1/R5) — introduce
   `Profile.synthesize(ctx)`. **First** move `briefing.synthesize` = today's per-presentation +
   thematic code **VERBATIM** (proves LSIC byte-identical, no mode-branch). Then
   `lecture.synthesize` = `segment.py` (R5) + `synth_mapreduce.py`: MAP extracts local facts per
