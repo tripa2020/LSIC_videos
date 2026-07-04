@@ -62,6 +62,8 @@ Calibration — surface takeaway vs extraction (always write the second, never t
 - BAD: "Musk uses first principles." GOOD: "Musk decomposes a 'too expensive' claim into physical inputs and their commodity prices — a Decomposition move that exposes which costs are real and which are historical accident."
 - BAD: "Feynman was curious." GOOD: "Feynman refuses to accept a name as an explanation and rebuilds the mechanism from scratch — a First-principles move that separates knowing-the-word from knowing-the-thing."
 
+SELF-CONTAINED RULE: the reader has NOT watched the talk. Any talk-specific coinage, anecdote, metric, or number must be introduced in the same bullet where it first appears, in one clause of setup — e.g. "'nines' = reliability digits: 90% is one nine, 99% is two, and each added nine costs constant effort", or "asked for a joke ten times, the model returns the same three". Never allude to an example without stating what happened; never assume a term of art carries over from the talk.
+
 EPISTEMIC STATUS (survivorship guard): if a CLAIMS TO TAG list is provided below, emit ONE claim_epistemic per listed claim, keyed by that exact evidence_id. Reason from your OWN knowledge; no external lookup.
 
 VERBOSITY: the work field is 2-3 substantive sentences per move — depth over brevity, no padding.
@@ -82,6 +84,8 @@ Output ONLY a single JSON object with EXACTLY this shape (no prose, no code fenc
 FOUNDER LENS: 3-5 entries, synthesized ACROSS the whole talk — combine moves and claims where the real opportunity lives; do NOT force one entry per move. The wedge sentence must pass this test: if the initial market cannot be described in one sentence, it is a wish, not a wedge. Never write "X is a big market" — name the segment, the pain, the timing, and the access.
 
 RETRIEVAL PROMPTS: 5-8, written to spaced-repetition rules — each must force recall from memory (never answerable by recognition), never yes/no, never "list all N" enumerations, one atomic idea each, with precise answers.
+
+SELF-CONTAINED RULE: the reader has NOT watched the talk. Define every talk-specific coinage, anecdote, metric, or number in the same entry where it first appears, in one clause of setup; each first_order_terms entry is "term (one-clause definition)", never a bare name. Never allude to an example without stating what happened.
 
 CITATION RULE: every evidence_id MUST appear in the EVENT CONTEXT. Never invent one. Produce the JSON now."""
 

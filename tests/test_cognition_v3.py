@@ -145,6 +145,7 @@ def test_extract_prompt_demands_v3_floor_and_probes():
     assert "anomalies" in p and "workarounds" in p                # ACTA probes
     assert "Perception" in p and "Taste" in p and "Incentives" in p   # 15-tag taxonomy
     assert "exact substring" in p                                 # verbatim-quote grounding
+    assert "NOT watched the talk" in p                            # self-contained rule (v4 A/B finding)
 
 
 def test_convert_prompt_carries_wedge_rubric_and_matuschak_rules():
@@ -153,3 +154,4 @@ def test_convert_prompt_carries_wedge_rubric_and_matuschak_rules():
     assert "wish, not a wedge" in p                               # the one-sentence wedge test
     assert "never yes/no" in p                                    # retrieval-prompt rules
     assert "buildable_artifact" in p
+    assert "NOT watched the talk" in p                            # self-contained rule (v4 A/B finding)
