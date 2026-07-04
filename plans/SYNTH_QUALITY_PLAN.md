@@ -1,14 +1,15 @@
 # SYNTH_QUALITY — Durable PLAN
 
-> 🟢 **ACTIVE PLAN — this is the plan currently being worked on (as of 2026-06-26).**
-> **Build order (re-prioritized 2026-06-26):** **MAPRED → FIX → EVAL → RUNEASY** (then BATCH).
-> BASE + DEPTH v1/v2 already shipped. **MAPRED is the immediate build target.** RUNEASY = a
-> one-command list/playlist → `--remote` batch front door (new milestone, scoped below).
+> 🟢 **ACTIVE PLAN — this is the plan currently being worked on (as of 2026-07-03).**
+> **Build order (re-prioritized 2026-07-03):** **DEPTH v3 → EVAL → FIX → RUNEASY** (then BATCH).
+> BASE + DEPTH v1/v2 + MAPRED shipped (MAPRED verified 2026-06-27 on `alex/mapred-windows`;
+> merge to main pending). **DEPTH v3 — the cognitive core taken to the real world — is the
+> immediate build target:** full-context two-pass cognition, Founder Lens, How-to-Learn-It.
 
 _The living source of truth for the reprioritized quality-first roadmap. Kept synced to the
 code. Frozen provenance: `SYNTH_QUALITY_DESIGN_RATIONALE.md`. **Supersedes** `archived/SYNTH_V2_PLAN.md`
 (design-only) and owns the unfinished tail of `archived/CLOUD_BATCH_PLAN.md` (the 122-run + 2 bugs).
-Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED → FIX → EVAL → RUNEASY next.**_
+Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; DEPTH v3 → EVAL → FIX → RUNEASY next.**_
 
 ## Intro
 
@@ -29,10 +30,10 @@ Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED �
   **byte-identical**.
 
 ```
-[✓BASE] [✓DEPTH v1/v2] ──► MAPRED ──► FIX ──► EVAL ──► RUNEASY ──► BATCH
- freeze  cognition          chapter    2 bugs  pure      list/PL →   122-run
- A/B ref layer              map-reduce         scorer    --remote    (briefing)
-                  (re-prioritized 2026-06-26 — long-video synthesis win first)
+[✓BASE] [✓DEPTH v1/v2] [✓MAPRED] ──► DEPTH v3 ──► EVAL ──► FIX ──► RUNEASY ──► BATCH
+ freeze  cognition       windowed     cognitive     pure     2 bugs  list/PL →   122-run
+ A/B ref layer           map-reduce   core v3       scorer           --remote    (briefing)
+              (re-prioritized 2026-07-03 — founder-grade cognitive core first)
 ```
 
 ---
@@ -53,6 +54,15 @@ Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED �
 | SYNTH scope            | EVAL + DEPTH + MAPRED only                                          | Stop before the LLM critic→revise pass (old M-S4); measured map-reduce win is enough | 2026-06-25 |
 | 122 independence       | BATCH uses briefing profile → unaffected by PART 1                  | Map-reduce touches only `lecture`; FIX is the only real blocker for the 122         | 2026-06-25 |
 | Non-breaking           | Map-reduce flag/threshold-gated; default monolith byte-identical    | Degrade-to-today; 113 tests + `--selftest` golden stay green                        | 2026-06-25 |
+| Priority order (rev 2) | DEPTH v3 → EVAL → FIX → RUNEASY → BATCH (MAPRED verified 2026-06-27) | Alex 2026-07-01: the cognitive core is where the pipeline's utility concentrates — "this is where this should focus for now" | 2026-07-03 |
+| Cognition context (v3) | Cognition path drops the 140k-char cap — the FULL transcript goes into one call (146 min ≈ 45k tok; Fable's 1M-token window ≈ 20× headroom; the 4h ingest cap bounds the worst case ≤ ~90k tok). No cognition windowing. | Hard data: no cognitive move in v2_opus OR v3 cites past [83:33] of the 146-min talk — the self-imposed cap physically hid the last hour (incl. the [138:55] educator material Alex flagged). MAPRED-style windowing is unnecessary at these sizes and costs more | 2026-07-03 |
+| Cognition model (v3)   | `COGNITION_MODEL` default → **`claude-fable-5`** ($10/$50 per Mtok); thinking always-on (omit the param); refusal → server-side fallback `claude-opus-4-8` (doubles as the A/B knob) | Cognition is the highest-reasoning task in the pipeline; Alex accepted ~2× Opus cost for the cognitive core; the fallback keeps runs alive on classifier false-positives | 2026-07-03 |
+| Two-pass cognition R6  | **Pass 1 EXTRACT** (speaker-facing: algorithm · ≥10 moves · epistemics) → **Pass 2 CONVERT** (reader-facing: Founder Lens + How-to-Learn-It; input = transcript + Pass 1 moves). `COGNITION_SPLIT=0` = single merged call (cost fallback + A/B) | DEPTH v1's measured failure mode: crowded calls under-resource tail fields; extraction (describe the speaker) and conversion (prescribe for the reader) are different cognitive jobs. ~$1.20–1.50/talk vs $0.70 — Alex chose depth over cost | 2026-07-03 |
+| Founder Lens section   | NEW top-level section, **3-5 entries synthesized ACROSS the talk** (NOT 1:1 per move): idea(from_moves + [mm:ss]) → `wedge` (ONE sentence passing the rubric: segment + urgent pain + why-now + access) → `action` (Monday morning) → `learn` (gap to close) → `deeper` (1-2 named) | Alex's reader persona: robotics entrepreneur/CEO taking ideas to the real world. 1:1 per-move mapping would force filler wedges; the rubric (NFX/Every wedge literature) blocks hand-wavy "robotics is big" output | 2026-07-03 |
+| How-to-Learn-It section | NEW top-level section: 5-8 retrieval Q/A prompts (Matuschak rules: effortful recall, no yes/no, no enumerations) + first-order terms + ONE minimal buildable artifact (micrograd-style) | "Educator every time" as concrete artifacts, not advice — retrieval practice is the evidence-backed mechanism for retention; Q/A pairs are Anki/Mochi-importable later | 2026-07-03 |
+| Moves contract (v3)    | **≥10 moves × 2-3 substantive sentences**; per move: verbatim quote · tag · work · fails_when · self_question; tag set = full 15-tag taxonomy **+ ACTA probes** (anomaly-noticing, workarounds/job-smarts, improvising, self-monitoring); quote-FIRST-then-analyze ordering; 2-3 few-shot exemplars | Alex: v3 moves "not robust/verbose enough" — the old prompt itself CAPPED output ("4-7 entries", "one substantive sentence, no padding", 8 tags, no exemplars). ACTA adds the practitioner-craft dimensions; verbatim quotes make EVAL's hallucination check deterministic | 2026-07-03 |
+| Reader-context parity  | `READER_DOMAIN` + `CURRENT_WORK` (founder-persona wording) baked into `.env` and topped-up to the VM `.env` by `remote.py` (same grep-append as the ANTHROPIC key); no-domain degrade → GENERIC self-questions, never an empty section | v3's Transfer Questions vanished because the VM never saw the env vars and the prompt ordered an empty list on no-domain — an env-parity bug class, killed at the root | 2026-07-03 |
+| Cognition failure semantics | Required fields (algorithm · moves≥10 · founder_lens · learn_it) get ONE repair retry, then degrade with a **visible `cognition_status`** in the bundle + JSON; `COGNITION_COST_CEILING` (default $2.00/talk) estimated pre-call, printed every run, hard-stop above | Today ANY cognition failure silently drops the whole layer — that is exactly how the vanished section went unnoticed; the ceiling was requested "to start off with as we start" | 2026-07-03 |
 
 ### System map
 
@@ -85,6 +95,9 @@ Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED �
 | OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs?          | Commander | RUNEASY    |
 | OQ7  | RUNEASY: emit a single results index (table of all bundles) or per-video folders?  | Commander | RUNEASY    |
 | OQ8  | MAPRED: `WINDOW_BUDGET` default (per-window char/token budget) — tune via A/B vs golden | data      | MAPRED     |
+| OQ9  | `COGNITION_COST_CEILING` default — $2.00/talk chosen as the starting guard; revisit once the first v3 A/B run bills | Commander | DEPTH v3   |
+| OQ10 | Are ALL 5 per-move fields hard-required for a move to count (quote·tag·work·fails_when·self_question)? Defaulted to all-required — veto if too rigid | Commander | DEPTH v3   |
+| OQ11 | Exact `.env` wording for `READER_DOMAIN`/`CURRENT_WORK` — founder-persona draft delivered 2026-07-03, awaiting Alex's edit/blessing | Commander | DEPTH v3   |
 
 ### Deliverable / Output Contract
 
@@ -94,6 +107,7 @@ Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED �
 | `coverage_report.md`           | score JSON present; metrics computed        | chapter_coverage · cross_chapter_ratio · groundedness · leak (EVAL) |
 | `lecture` `notes.md` (map-reduce) | `validate_notes`; no truncation; sub-fields present | beats BASE on coherence; `cross_chapter_ratio ≥ OQ4` (MAPRED) |
 | 122 × `Report/` bundle         | `validate_notes`/`validate_slides`; GCS count | briefing profile, unchanged output (BATCH)         |
+| `lecture` cognition v3 bundle  | EVAL v3: moves ≥10 · ≥2 cite final third · quotes verbatim-match transcript · Founder Lens + Learn-It present · `cognition_status` clean | `golden/lXUZvyajciY_v4_depth3/` A/B vs `v2_opus` + `v3_mapreduce` (DEPTH v3) |
 
 ---
 
@@ -112,11 +126,17 @@ LSIC_videos/
 │   ├── profiles/briefing.py  NEW +≤20  briefing.synthesize = today's pres+thematic VERBATIM     [MAPRED]
 │   ├── profiles/lecture.py   MOD +≤80  lecture.synthesize = chapter map-reduce + sub-fields     [DEPTH/MAPRED]
 │   ├── synthesize.py         MOD +≤25  synthesize_full keeps scaffolding → calls prof.synthesize()
+│   ├── profiles/lecture.py   MOD +≤120 v3: EXTRACT prompt (≥10 moves, 15-tag+ACTA, quote-first, exemplars) + CONVERT prompt (Founder Lens, Learn-It) + 2 new render sections [DEPTH v3]
+│   ├── anthropic_caller.py   MOD +≤40  fable-5 routing (thinking omitted, server-side fallback→opus-4-8); pre-call cost estimate + ceiling [DEPTH v3]
+│   ├── synthesize.py         MOD +≤40  cognition context uncapped; two-pass orchestration + COGNITION_SPLIT; retry-then-cognition_status [DEPTH v3]
+│   ├── remote.py             MOD +≤15  top-up READER_DOMAIN/CURRENT_WORK into the VM .env [DEPTH v3]
+│   ├── contracts.py          MOD +≤60  CognitionOutput v3 (5-field moves) + ConversionOutput (founder_lens, learn_it) + cognition_status [DEPTH v3]
 │   ├── ingest.py             MOD +≤10  wrap _fetch_youtube/_fetch_http in util.retry_transient  [FIX]
 │   ├── main.py               MOD +≤8   only `--quality` deferred; print coverage score
 │   └── report.py             MOD +≤6   ship coverage_report.md (optional artifact)
 ├── download_lsic/run_corpus.sh   MOD   run_one traps failures, logs ❌, exits 0 (no xargs abort) [FIX]
 └── tests/
+    ├── test_cognition_v3.py     NEW    fakes: two-pass merge · split-knob routing · retry-then-status · ceiling stop · no-domain → generic questions [DEPTH v3]
     ├── test_segment.py          NEW    chapters | auto → ≥1; offsets correct
     ├── test_synth_mapreduce.py  NEW    fake LLM map+reduce; single-producer asserted
     ├── test_synth_eval.py       NEW    cite-spread on cites spanning 1 vs ≥2 chapters
@@ -195,6 +215,53 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   *Gate:* `/python-unit-tests` (fakes — dedicated-call seam, `when_it_fails` render, transfer
   grounding; briefing byte-identical) **+** A/B the regenerated lecture vs DEPTH-v1 by eye against the
   gold (EVAL scores groundedness but not "idiosyncrasy" — that stays a human/critic check).
+
+- [ ] **DEPTH v3 — the cognitive core, taken to the real world** (NEW 2026-07-03; R6 two-pass;
+  **immediate build target**) — make the cognition layer founder-grade: full-context, two-pass,
+  three sections. Root causes it kills (diagnosed 2026-07-02 from the `v3_mapreduce` A/B): the
+  140k context cap hid the last hour of the talk (no move cites past `[83:33]` of 146 min); the
+  VM never saw `READER_DOMAIN` (Transfer Questions silently vanished); the prompt itself capped
+  moves at 4-7 × 1 sentence; the educator lens appeared by luck (1 of 5 bundles).
+  1. **Full context.** The cognition path drops the 140k cap in `_build_event_context` — the
+     whole transcript goes into ONE call (146 min ≈ 45k tok; Fable's 1M-token window ≈ 20×
+     headroom; the 4h ingest cap bounds the worst case ≤ ~90k tok). The descriptive path keeps
+     MAPRED windowing untouched.
+  2. **Two-pass (`COGNITION_SPLIT`, default on).**
+     **Pass 1 EXTRACT** (speaker-facing): `operating_algorithm` + **≥10 `cognitive_moves`** —
+     per move: verbatim quote · tag · 2-3 sentence `work` · `fails_when` · `self_question`;
+     full 15-tag taxonomy **+ ACTA probes** (anomaly-noticing, workarounds/job-smarts,
+     improvising, self-monitoring); quote-FIRST-then-analyze ordering; 2-3 few-shot exemplars
+     (the Bezos/Musk/Feynman surface-vs-extraction conversions) — + `claim_epistemics` +
+     `what_doesnt_transfer`.
+     **Pass 2 CONVERT** (reader-facing; input = transcript + Pass 1 moves): **Founder Lens —
+     To Market** (3-5 entries synthesized ACROSS the talk, NOT 1:1 per move: idea(from_moves +
+     `[mm:ss]`) → `wedge` — ONE sentence passing the rubric segment + urgent pain + why-now +
+     access → `action` (Monday morning) → `learn` (gap to close) → `deeper` (1-2 named)) and
+     **How to Learn It (So It Sticks)** (5-8 retrieval Q/A prompts per Matuschak's rules —
+     effortful recall, no yes/no, no enumerations — + first-order terms + ONE minimal buildable
+     artifact, micrograd-style). `COGNITION_SPLIT=0` merges everything into one call (cost
+     fallback + A/B).
+  3. **Model + cost.** `COGNITION_MODEL` default → **`claude-fable-5`** (thinking always-on —
+     omit the param; server-side refusal fallback → `claude-opus-4-8`, which doubles as the A/B
+     knob). Pre-call cost estimate printed EVERY run; `COGNITION_COST_CEILING` (default
+     $2.00/talk, OQ9) hard-stops above. Two-pass ≈ $1.20-1.50/talk.
+  4. **Reader-context parity.** `READER_DOMAIN` + `CURRENT_WORK` (founder persona: robotics
+     entrepreneur/CEO; Tripp arm + LSIC pipeline as current work — wording OQ11) baked into
+     `.env`; `remote.py` tops them up into the VM `.env` (same grep-append as the ANTHROPIC
+     key). No-domain degrade → GENERIC self-questions — the section never silently vanishes.
+  5. **Failure semantics.** A missing/invalid required field (`operating_algorithm`,
+     `cognitive_moves`≥10, `founder_lens`, `learn_it`) gets ONE repair retry, then degrades
+     with a **visible `cognition_status`** in the bundle + JSON. Schemas: `CognitionOutput` v3
+     + new `ConversionOutput` in `contracts.py`.
+  *Gate:* `/python-unit-tests` fakes — two-pass merge · split-knob routing · retry-then-status ·
+  ceiling hard-stop · no-domain generic questions · **briefing byte-identical** — **+** live A/B:
+  regenerate the Karpathy talk → `golden/lXUZvyajciY_v4_depth3/`, judged vs `v2_opus` +
+  `v3_mapreduce` by eye; EVAL (next milestone) retro-scores it deterministically (moves ≥10,
+  ≥2 final-third cites, verbatim-quote match, sections present).
+  *Provenance:* Alex's cognitive-core framework (thought-process extraction, 2026-07-01) +
+  the 2026-07-03 research adoptions — ACTA knowledge-audit probes (Militello & Hutton),
+  Matuschak retrieval-prompt rules, the wedge rubric (NFX / Every), and quote-first /
+  according-to grounding.
 
 - [x] **MAPRED — profile-owned synthesis + lecture map-reduce** (VERIFIED 2026-06-27; R1/R5) — introduce
   `Profile.synthesize(ctx)`. **First** move `briefing.synthesize` = today's per-presentation +
@@ -279,11 +346,12 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
 ### Dependency graph + build order
 
 ```
-DONE: BASE (frozen A/B ref) · DEPTH v1/v2 (cognition layer)
-MAPRED (chapter map-reduce; beat BASE on the A/B) ──► FIX (driver no-drop + ingest retry)
-   ──► EVAL (pure scorer; retro-scores MAPRED) ──► RUNEASY (list/playlist → --remote) ──► BATCH (122-run)
+DONE: BASE (frozen A/B ref) · DEPTH v1/v2 (cognition layer) · MAPRED (verified 2026-06-27; merge pending)
+DEPTH v3 (full-context two-pass cognitive core; Founder Lens + Learn-It; beat v2_opus/v3 on the A/B)
+   ──► EVAL (pure scorer + v3 cognition checks; retro-scores MAPRED + DEPTH v3)
+   ──► FIX (driver no-drop + ingest retry) ──► RUNEASY (list/playlist → --remote) ──► BATCH (122-run)
 ```
-Build order **MAPRED → FIX → EVAL → RUNEASY → BATCH** (re-prioritized 2026-06-26). Each: own
+Build order **DEPTH v3 → EVAL → FIX → RUNEASY → BATCH** (re-prioritized 2026-07-03). Each: own
 branch `alex/<short-desc>`, degrade-to-today (default monolith = byte-identical), fakes-only tests
 green, merged only when green + verified.
 **Caveat (eval-first tension):** MAPRED now lands BEFORE EVAL, so during MAPRED there is no
@@ -324,6 +392,9 @@ deterministic scorer — lift is judged **by eye against the frozen golden bundl
 | `test_segment` / `test_synth_mapreduce` | ≥1 unit; single-producer (no summary from chapters) | MAPRED   |
 | `--selftest` golden + synth tests | briefing byte-identical (no regression)                  | MAPRED   |
 | A/B vs BASE on `synth_eval`   | map-reduce ≥ monolith coherence; no truncation               | MAPRED   |
+| `test_cognition_v3` (fakes)   | two-pass merge; split-knob routing; retry-then-status; ceiling stop; generic-question degrade | DEPTH v3 |
+| EVAL v3 cognition checks      | moves ≥10; ≥2 final-third cites; quotes verbatim-match transcript; sections present           | EVAL     |
+| A/B v4 vs v2_opus/v3 by eye   | founder-lens utility; move depth; learn-it quality (human judgment — EVAL can't score taste)  | DEPTH v3 |
 | `test_corpus_driver` (fakes)  | a failing event doesn't drop the rest; ingest retry          | FIX      |
 | Existing 113 tests            | no regression with all new paths OFF                         | every step |
 | Full-run count + spot-check   | 122 bundles, spend ≤ ceiling                                 | BATCH    |
@@ -343,6 +414,10 @@ _Inherited from CLOUD_BATCH / EASYRUN; resolved within this plan's FIX milestone
 | Long-video synthesis truncated / "lost in the middle" | thematic call caps context at 140k chars ([src/synthesize.py:553])                          | MAPRED: chapter map-reduce removes the single-call ceiling         | OPEN   |
 | `validate_notes`/`validate_slides` false-fail on a `lecture` bundle | both encode the 15-section LSIC **briefing** template only | EVAL (profile-agnostic, reads structured JSON) is the lecture scorer; a profile-aware validator is a later option | KNOWN  |
 | `references.md` off-target on metaphorical claims    | `derive_queries` keyword-matched "building animals/ghosts" → smart-buildings energy papers   | EASYRUN M3.1 residual; LLM query-gen is the upgrade (out of scope here) | KNOWN  |
+| v3 lecture bundle lost Transfer Questions entirely   | `--remote` VM never receives `READER_DOMAIN`/`CURRENT_WORK` (remote.py ships only API keys); the prompt orders an empty list on no-domain; render omits empty sections silently | DEPTH v3: bake into `.env` + remote top-up; generic-question degrade; visible `cognition_status` | OPEN   |
+| No cognitive move cites past `[83:33]` of a 146-min talk | cognition call is single-pass under the 140k-char cap ([synthesize.py:606], [:532]) — the model never SEES the last hour | DEPTH v3: uncap the cognition context (one full-context Fable call) + EVAL final-third guard | OPEN   |
+| Educator perspective appears by luck (1 of 5 golden bundles) | lens selection is model-free-choice ("choose 3-5 perspectives that genuinely fit")     | DEPTH v3: dedicated How-to-Learn-It section owned by the CONVERT pass (always rendered)       | OPEN   |
+| Cognitive Moves thin (≤7 moves × 1 sentence)         | the prompt itself caps output: "4-7 entries", "one substantive sentence per item, no padding"; 8-tag set; no exemplars | DEPTH v3: ≥10 moves × 2-3 sentences, 15-tag + ACTA probes, few-shot exemplars                 | OPEN   |
 
 ### Out of scope (deferred / parallel tracks)
 
