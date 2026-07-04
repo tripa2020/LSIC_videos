@@ -1,4 +1,4 @@
-> ⛔ **SUPERSEDED (2026-06-25) by [`SYNTH_QUALITY_PLAN.md`](SYNTH_QUALITY_PLAN.md).** This was
+> ⛔ **SUPERSEDED (2026-06-25) by [`SYNTH_QUALITY_PLAN.md`](../SYNTH_QUALITY_PLAN.md).** This was
 > design-only and never built. Its milestones were cannibalized into SYNTH_QUALITY with clearer
 > names: **M-S0 → EVAL**, **M-S1 → DEPTH**, **M-S2 → MAPRED** (M-S3 report + M-S4 critic→revise
 > deferred). Kept for design provenance only — do **not** drive work from this file.

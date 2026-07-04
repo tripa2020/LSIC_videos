@@ -6,8 +6,8 @@
 > one-command list/playlist → `--remote` batch front door (new milestone, scoped below).
 
 _The living source of truth for the reprioritized quality-first roadmap. Kept synced to the
-code. Frozen provenance: `SYNTH_QUALITY_DESIGN_RATIONALE.md`. **Supersedes** `SYNTH_V2_PLAN.md`
-(design-only) and owns the unfinished tail of `CLOUD_BATCH_PLAN.md` (the 122-run + 2 bugs).
+code. Frozen provenance: `SYNTH_QUALITY_DESIGN_RATIONALE.md`. **Supersedes** `archived/SYNTH_V2_PLAN.md`
+(design-only) and owns the unfinished tail of `archived/CLOUD_BATCH_PLAN.md` (the 122-run + 2 bugs).
 Status as of 2026-06-26: **in progress — BASE + DEPTH v1/v2 shipped; MAPRED → FIX → EVAL → RUNEASY next.**_
 
 ## Intro
