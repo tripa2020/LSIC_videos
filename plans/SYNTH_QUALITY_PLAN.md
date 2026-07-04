@@ -62,7 +62,7 @@ Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; 
 | How-to-Learn-It section | NEW top-level section: 5-8 retrieval Q/A prompts (Matuschak rules: effortful recall, no yes/no, no enumerations) + first-order terms + ONE minimal buildable artifact (micrograd-style) | "Educator every time" as concrete artifacts, not advice — retrieval practice is the evidence-backed mechanism for retention; Q/A pairs are Anki/Mochi-importable later | 2026-07-03 |
 | Moves contract (v3)    | **≥10 moves × 2-3 substantive sentences**; per move: verbatim quote · tag · work · fails_when · self_question; tag set = full 15-tag taxonomy **+ ACTA probes** (anomaly-noticing, workarounds/job-smarts, improvising, self-monitoring); quote-FIRST-then-analyze ordering; 2-3 few-shot exemplars | Alex: v3 moves "not robust/verbose enough" — the old prompt itself CAPPED output ("4-7 entries", "one substantive sentence, no padding", 8 tags, no exemplars). ACTA adds the practitioner-craft dimensions; verbatim quotes make EVAL's hallucination check deterministic | 2026-07-03 |
 | Reader-context parity  | `READER_DOMAIN` + `CURRENT_WORK` (founder-persona wording) baked into `.env` and topped-up to the VM `.env` by `remote.py` (same grep-append as the ANTHROPIC key); no-domain degrade → GENERIC self-questions, never an empty section | v3's Transfer Questions vanished because the VM never saw the env vars and the prompt ordered an empty list on no-domain — an env-parity bug class, killed at the root | 2026-07-03 |
-| Cognition failure semantics | Required fields (algorithm · moves≥10 · founder_lens · learn_it) get ONE plain re-issue retry (identical call, no repair prompt), then degrade with a **visible `cognition_status`** in the bundle + JSON. Cost = **ACTUAL API usage→$** (pricing table lives ONLY in `anthropic_caller`), printed per pass; `COGNITION_COST_CEILING` (default $2.00/talk) enforced **between Pass 1 and Pass 2**; a fixed input-size guard covers the pre-call pathological case | Today ANY cognition failure silently drops the whole layer — that is exactly how the vanished section went unnoticed; the ceiling was requested "to start off with as we start". A pre-call chars/4 estimator would duplicate drift-prone pricing knowledge (complexity review) | 2026-07-03 |
+| Cognition failure semantics | Required fields (algorithm · moves≥10 · founder_lens · learn_it) get ONE plain re-issue retry (identical call, no repair prompt), then degrade with a **visible `cognition_status`** in the bundle + JSON. Cost = **ACTUAL API usage→$** (pricing table lives ONLY in `anthropic_caller`), printed per pass; **no ceiling in v1** — observe the completed system's real cost, then set `COGNITION_COST_CEILING` (OQ9 revised); a fixed input-size sanity guard covers the pathological case | Today ANY cognition failure silently drops the whole layer — that is exactly how the vanished section went unnoticed. Alex 2026-07-03: "see the cost after running the completed system before setting a ceiling"; a pre-call chars/4 estimator would duplicate drift-prone pricing knowledge (complexity review) | 2026-07-03 |
 | Complexity review (v3) | Reductions applied 2026-07-03 (all utility-neutral — default two-pass output unchanged): (1) no `COGNITION_SPLIT` knob (goldens = A/B baseline, no third prompt variant); (2) actual-usage cost accounting, ceiling between passes; (3) single downstream contract — `founder_lens`/`learn_it` are optional fields ON `CognitionOutput` v3; (4) `remote.py` top-up generalized to a key-list loop; (5) plain re-issue retry, no repair prompt | `/complexity_reviewer` on the v3 spec: the split knob's OFF path and the pre-call estimator were the two 🔴 modules (permanent prompt-maintenance surface; shallow drift-prone heuristic) | 2026-07-03 |
 
 ### System map
@@ -96,9 +96,9 @@ Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; 
 | OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs?          | Commander | RUNEASY    |
 | OQ7  | RUNEASY: emit a single results index (table of all bundles) or per-video folders?  | Commander | RUNEASY    |
 | OQ8  | MAPRED: `WINDOW_BUDGET` default (per-window char/token budget) — tune via A/B vs golden | data      | MAPRED     |
-| OQ9  | `COGNITION_COST_CEILING` default — $2.00/talk chosen as the starting guard; revisit once the first v3 A/B run bills | Commander | DEPTH v3   |
+| ~~OQ9~~ | ✅ RESOLVED 2026-07-03 (revised) — **no ceiling in v1**. Run the completed system, observe actual per-pass usage→$ (printed every run), THEN set `COGNITION_COST_CEILING`; enforcement code ships later with a real number | Commander | post-A/B   |
 | OQ10 | Are ALL 5 per-move fields hard-required for a move to count (quote·tag·work·fails_when·self_question)? Defaulted to all-required — veto if too rigid | Commander | DEPTH v3   |
-| OQ11 | Exact `.env` wording for `READER_DOMAIN`/`CURRENT_WORK` — founder-persona draft delivered 2026-07-03, awaiting Alex's edit/blessing | Commander | DEPTH v3   |
+| ~~OQ11~~ | ✅ RESOLVED 2026-07-03 — founder-persona wording **blessed as drafted** and written to the gitignored `.env`: READER_DOMAIN = robotics-entrepreneur/CEO lens; CURRENT_WORK = venture-wedge scouting + Tripp arm + LSIC pipeline | — | done |
 
 ### Deliverable / Output Contract
 
@@ -137,7 +137,7 @@ LSIC_videos/
 │   └── report.py             MOD +≤6   ship coverage_report.md (optional artifact)
 ├── download_lsic/run_corpus.sh   MOD   run_one traps failures, logs ❌, exits 0 (no xargs abort) [FIX]
 └── tests/
-    ├── test_cognition_v3.py     NEW    fakes: two-pass merge · retry-then-status · between-pass ceiling stop · key-list top-up · no-domain → generic questions [DEPTH v3]
+    ├── test_cognition_v3.py     NEW    fakes: two-pass merge · retry-then-status · per-pass cost reporting · key-list top-up · no-domain → generic questions [DEPTH v3]
     ├── test_segment.py          NEW    chapters | auto → ≥1; offsets correct
     ├── test_synth_mapreduce.py  NEW    fake LLM map+reduce; single-producer asserted
     ├── test_synth_eval.py       NEW    cite-spread on cites spanning 1 vs ≥2 chapters
@@ -245,10 +245,11 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   3. **Model + cost.** `COGNITION_MODEL` default → **`claude-fable-5`** (thinking always-on —
      omit the param; server-side refusal fallback → `claude-opus-4-8`, which doubles as the A/B
      knob). Cost = ACTUAL API usage→$ (pricing lives only in `anthropic_caller`), printed per
-     pass; `COGNITION_COST_CEILING` (default $2.00/talk, OQ9) enforced between Pass 1 and
-     Pass 2; a fixed input-size guard covers the pre-call case. Two-pass ≈ $1.20-1.50/talk.
+     pass. **No ceiling in v1** — observe the completed system's real cost first, then set
+     `COGNITION_COST_CEILING` (OQ9 revised). A fixed input-size sanity guard covers the
+     pathological case. Expected ≈ $1.20-1.50/talk.
   4. **Reader-context parity.** `READER_DOMAIN` + `CURRENT_WORK` (founder persona: robotics
-     entrepreneur/CEO; Tripp arm + LSIC pipeline as current work — wording OQ11) baked into
+     entrepreneur/CEO; Tripp arm + LSIC pipeline as current work — blessed 2026-07-03) baked into
      `.env`; `remote.py` tops them up into the VM `.env` (same grep-append as the ANTHROPIC
      key). No-domain degrade → GENERIC self-questions — the section never silently vanishes.
   5. **Failure semantics.** A missing/invalid required field (`operating_algorithm`,
@@ -257,8 +258,8 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
      bundle + JSON. Schema: ONE downstream contract — `founder_lens` + `learn_it` are
      optional-default-empty fields on `CognitionOutput` v3 (each pass validates its half via
      thin submodels); "absent ⇒ section omitted" falls out of the defaults for free.
-  *Gate:* `/python-unit-tests` fakes — two-pass merge · retry-then-status · between-pass ceiling
-  stop · key-list env top-up · no-domain generic questions · **briefing byte-identical** — **+** live A/B:
+  *Gate:* `/python-unit-tests` fakes — two-pass merge · retry-then-status · per-pass cost
+  reporting · key-list env top-up · no-domain generic questions · **briefing byte-identical** — **+** live A/B:
   regenerate the Karpathy talk → `golden/lXUZvyajciY_v4_depth3/`, judged vs `v2_opus` +
   `v3_mapreduce` by eye; EVAL (next milestone) retro-scores it deterministically (moves ≥10,
   ≥2 final-third cites, verbatim-quote match, sections present).
@@ -396,7 +397,7 @@ deterministic scorer — lift is judged **by eye against the frozen golden bundl
 | `test_segment` / `test_synth_mapreduce` | ≥1 unit; single-producer (no summary from chapters) | MAPRED   |
 | `--selftest` golden + synth tests | briefing byte-identical (no regression)                  | MAPRED   |
 | A/B vs BASE on `synth_eval`   | map-reduce ≥ monolith coherence; no truncation               | MAPRED   |
-| `test_cognition_v3` (fakes)   | two-pass merge; retry-then-status; between-pass ceiling; key-list top-up; generic-question degrade | DEPTH v3 |
+| `test_cognition_v3` (fakes)   | two-pass merge; retry-then-status; cost reporting; key-list top-up; generic-question degrade | DEPTH v3 |
 | EVAL v3 cognition checks      | moves ≥10; ≥2 final-third cites; quotes verbatim-match transcript; sections present           | EVAL     |
 | A/B v4 vs v2_opus/v3 by eye   | founder-lens utility; move depth; learn-it quality (human judgment — EVAL can't score taste)  | DEPTH v3 |
 | `test_corpus_driver` (fakes)  | a failing event doesn't drop the rest; ingest retry          | FIX      |
