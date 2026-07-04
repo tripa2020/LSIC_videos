@@ -61,67 +61,13 @@ an evidence_id. A section with no support → an empty list (it renders as "Not 
 Be specific and technical. Produce the JSON now."""
 
 
-# DEPTH v2: the dedicated COGNITION call (how the speaker thinks). Its own focused pass so the
-# inferential work isn't crowded out by the ~11 descriptive fields. Routed to Opus 4.8 by default.
-COGNITION_SYSTEM_PROMPT = """You analyze HOW a speaker thinks in a talk/lecture transcript — the repeatable mental operations behind the content, not just what was said. You are given the EVENT CONTEXT: a per-section transcript with [ev_...] evidence markers.
-
-Output ONLY a single JSON object with EXACTLY this shape (no prose, no code fences):
-{
-  "operating_algorithm": {"arrow_chain": "<the speaker's reasoning PROCEDURE as a → chain>", "tags": ["<2-4 EXPLAINER tags>"]},
-  "cognitive_moves": [{"move": "<short quote/paraphrase>", "tag": "<one EXPLAINER tag>", "work": "<what the move does to the listener's model>", "evidence_id": "ev_..."}],
-  "claim_epistemics": [{"evidence_id": "<ev_... of a load-bearing claim present in the EVENT CONTEXT>", "status": "<consensus|his bet|contested|his frame>", "when_it_fails": "<the boundary condition where this claim/play backfires + who has run it and lost>"}],
-  "what_doesnt_transfer": "<one line: which positions are bets/taste vs durable mechanisms>",
-  "transfer_questions": [{"prompt": "<reusable question for the READER DOMAIN>", "from_move": "<which move it derives from>", "evidence_id": "ev_..."}]
-}
-
-OPERATING ALGORITHM: one arrow-chain capturing the speaker's IDIOSYNCRATIC, TRANSFERABLE reasoning
-signature — the repeatable procedure that GENERATES their conclusions. This is NOT a talk outline or
-topic sequence. If your chain reads like "intro → background → method → results", you have described
-the TALK, not the THINKING — redo it as the distinctive moves only THIS speaker runs. End with 2-4
-dominant move-tags.
-
-COGNITIVE MOVES: 4-7 entries. Tag the OPERATION, not the topic. For each, say what WORK the move does
-on the listener's model (what it swaps / collapses / maps / flips / re-anchors). Use ONLY the EXPLAINER
-tag set: Analogy, Reframe, Mechanism, Base-rate, Inversion, Sequencing, First-principles, Distinction.
-
-EPISTEMIC STATUS (survivorship guard): you are given a CLAIMS TO TAG list below (each is an [evidence_id]
-plus the claim text). Emit ONE claim_epistemic per listed claim, keyed by that exact evidence_id (so the
-judgement overlays the right claim). status ∈ consensus / his bet / contested / his frame. when_it_fails =
-the boundary condition where this claim/play BACKFIRES, and who has run the same play and lost — reason
-from your OWN knowledge, NO external lookup. Then what_doesnt_transfer = ONE line separating the speaker's
-bets & taste (hold loosely) from their durable mechanisms (the transferable part).
-
-TRANSFER QUESTIONS: convert the cognitive moves into reusable self-questions for the READER DOMAIN given
-below — ONE question per major move, each tied to its move and grounded in an evidence_id where possible.
-If no READER DOMAIN is provided, return an empty list.
-
-VERBOSITY: match the Cognitive Moves level — one substantive sentence per item, no padding.
-
-CITATION RULE: every evidence_id MUST appear in the EVENT CONTEXT. Never invent one. No support → an
-empty list. Produce the JSON now."""
+# DEPTH v3: the cognition prompts (extract + convert) live in src/cognition.py — the dedicated
+# two-pass cognitive core. This profile keeps the DESCRIPTIVE prompt + the render.
 
 
 def thematic_prompt() -> str:
-    """The lecture DESCRIPTIVE system prompt (the cognition fields moved to the dedicated cognition
-    call — see ``cognition_prompt``)."""
+    """The lecture DESCRIPTIVE system prompt (the cognition layer is src/cognition.py)."""
     return THEMATIC_SYSTEM_PROMPT
-
-
-def cognition_prompt(reader_domain: str = "", current_work: str = "") -> str:
-    """The dedicated cognition system prompt, with READER DOMAIN + optional CURRENT WORK woven in for
-    the Transfer Questions. No reader domain (arg or env ``READER_DOMAIN``) ⇒ an empty
-    transfer_questions list ⇒ that section is omitted. ``CURRENT_WORK`` (arg or env) sharpens the
-    questions from domain-level to project-level."""
-    rd = (reader_domain or os.environ.get("READER_DOMAIN", "")).strip()
-    cw = (current_work or os.environ.get("CURRENT_WORK", "")).strip()
-    if not rd:
-        tail = "\n\nREADER DOMAIN: (none) — return an empty transfer_questions list."
-    else:
-        tail = f"\n\nREADER DOMAIN: {rd}"
-        if cw:
-            tail += ("\nCURRENT WORK (sharpen each transfer_question from domain-level to PROJECT-level "
-                     f"against this): {cw}")
-    return COGNITION_SYSTEM_PROMPT + tail
 
 
 def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highlights,
@@ -160,9 +106,55 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
         moves = thematic.get("cognitive_moves") or []
         if not moves:
             return []
-        rows = [f"- **{m.get('move', '').strip()}** — *{m.get('tag', '?')}* — "
-                f"{m.get('work', '').strip()}{cite(m.get('evidence_id'))}" for m in moves]
+        rows: list[str] = []
+        for m in moves:
+            rows.append(f"- **{m.get('move', '').strip()}** — *{m.get('tag', '?')}* — "
+                        f"{m.get('work', '').strip()}{cite(m.get('evidence_id'))}")
+            # v3 sub-lines — each omitted when absent (pre-v3 bundles render unchanged)
+            if (m.get("quote") or "").strip():
+                rows.append(f"  > “{m['quote'].strip()}”")
+            if (m.get("fails_when") or "").strip():
+                rows.append(f"  ↳ *fails when:* {m['fails_when'].strip()}")
+            if (m.get("self_question") or "").strip():
+                rows.append(f"  ↳ *ask yourself:* {m['self_question'].strip()}")
         return ["## Cognitive Moves", *rows, ""]
+
+    def founder_lines() -> list[str]:
+        plays = thematic.get("founder_lens") or []
+        if not plays:
+            return []
+        rows: list[str] = ["## Founder Lens — To Market"]
+        for p in plays:
+            rows.append(f"### {p.get('idea', '').strip()}{cite(p.get('evidence_id'))}")
+            frm = ", ".join(x for x in (p.get("from_moves") or []) if x)
+            if frm:
+                rows.append(f"*From: {frm}*")
+            rows.append(f"- **Wedge:** {p.get('wedge', '').strip()}")
+            rows.append(f"- **Action (Monday morning):** {p.get('action', '').strip()}")
+            rows.append(f"- **Learn:** {p.get('learn', '').strip()}")
+            rows.append(f"- **Go deeper:** {p.get('deeper', '').strip()}")
+            rows.append("")
+        return rows
+
+    def learnit_lines() -> list[str]:
+        li = thematic.get("learn_it") or {}
+        prompts = li.get("retrieval_prompts") or []
+        terms = [t for t in (li.get("first_order_terms") or []) if t]
+        artifact = (li.get("buildable_artifact") or "").strip()
+        if not (prompts or terms or artifact):
+            return []
+        rows: list[str] = ["## How to Learn It (So It Sticks)"]
+        if terms:
+            rows += [f"**First-order terms:** {' · '.join(terms)}", ""]
+        if prompts:
+            rows.append("**Retrieval prompts** *(cover the answer, recall from memory, check)*")
+            for rp in prompts:
+                rows.append(f"- Q: {rp.get('q', '').strip()}{cite(rp.get('evidence_id'))}")
+                rows.append(f"  A: {rp.get('a', '').strip()}")
+            rows.append("")
+        if artifact:
+            rows += [f"**Build to internalize:** {artifact}", ""]
+        return rows
 
     def wdt_lines() -> list[str]:
         w = (thematic.get("what_doesnt_transfer") or "").strip()
@@ -228,6 +220,9 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
         "profile: lecture",
         "---\n",
         f"# {title}\n",
+        # v3: a degraded cognition layer is VISIBLE, never silent (empty status → no line)
+        *([f"> ⚠️ *cognition degraded:* {(thematic.get('cognition_status') or '').strip()}\n"]
+          if (thematic.get("cognition_status") or "").strip() else []),
         "## Summary",
         (thematic.get("summary") or "*Not applicable to this talk.*") + "\n",
         *algo_lines(),                                          # A — Operating Algorithm
@@ -253,7 +248,9 @@ def render_lecture(*, ing, alignment, pres_outputs, thematic: dict, slide_highli
         *wdt_lines(),                                          # C — what doesn't transfer
         "## Open Questions", *section(thematic.get("open_questions", [])), "",
         "## Takeaways", *section(thematic.get("takeaways", [])), "",
-        *transfer_lines(),                                     # D — Transfer Questions
+        *transfer_lines(),                                     # D — Transfer Questions (pre-v3)
+        *founder_lines(),                                      # D' — Founder Lens (v3)
+        *learnit_lines(),                                      # E — How to Learn It (v3)
         "## Field Implications — Where to Steer",
         *section(thematic.get("field_implications", [])), "",
         *_outlook_lines(thematic.get("industry_outlook") or {}, section), "",

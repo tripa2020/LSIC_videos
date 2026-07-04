@@ -23,6 +23,26 @@ from src import util
 DEFAULT_MODEL = "claude-opus-4-8"
 MAX_OUTPUT_TOKENS = 16000
 
+# The ONLY pricing table in the repo (per complexity review — no pre-call estimators
+# duplicating this knowledge). $ per Mtok (input, output). Unknown model → cost not printed.
+PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-4-8": (5.0, 25.0),
+}
+
+
+def _report_cost(model: str, resp) -> None:
+    """Print ACTUAL usage→$ for one call (DEPTH v3: observe real cost before any ceiling is
+    set — OQ9). Silent when the response carries no usage (fakes) or the model is unpriced."""
+    u = getattr(resp, "usage", None)
+    tin = getattr(u, "input_tokens", 0) or 0
+    tout = getattr(u, "output_tokens", 0) or 0
+    if not (tin or tout) or model not in PRICE_PER_MTOK:
+        return
+    pin, pout = PRICE_PER_MTOK[model]
+    cost = tin / 1e6 * pin + tout / 1e6 * pout
+    print(f"  [anthropic] {model}: {tin} in / {tout} out tokens ≈ ${cost:.2f}", flush=True)
+
 
 def _client():
     """Build a real Anthropic client (lazy import keeps module import dep-free)."""
@@ -31,9 +51,9 @@ def _client():
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY not set — the cognition call routes to Claude "
-            "(COGNITION_MODEL=claude-*). Set the key in .env, or run with "
-            "COGNITION_MODEL=gemini-2.5-pro to use Gemini.")
+            "ANTHROPIC_API_KEY not set — the cognition passes route to Claude "
+            "(COGNITION_MODEL, default claude-fable-5). Set the key in .env; without it "
+            "the cognition layer degrades with a visible cognition_status.")
     import anthropic
     return anthropic.Anthropic(api_key=key)
 
@@ -94,6 +114,7 @@ def call_json(system: str, user: str, *, model: str = DEFAULT_MODEL,
                 continue
             raise
 
+        _report_cost(model, resp)                     # billed regardless of what follows
         stop = getattr(resp, "stop_reason", None)
         if stop == "refusal":                         # don't retry a policy refusal
             raise RuntimeError(f"Anthropic refused (stop_details={getattr(resp, 'stop_details', None)})")

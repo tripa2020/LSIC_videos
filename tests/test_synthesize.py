@@ -68,11 +68,12 @@ def test_synthesize_full_lecture_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(synthesize, "_call_thematic",
                         lambda *a, **k: {"title": "E2E Talk", "summary": "S",
                                          "notable_claims": [{"text": "claim X", "evidence_id": "ev_1"}]})
-    monkeypatch.setattr(synthesize, "_call_cognition", lambda ctx, claims=None, model=None: {
+    from src import cognition
+    monkeypatch.setattr(cognition, "run", lambda context, claims=None, **kw: {
         "operating_algorithm": {"arrow_chain": "p → q", "tags": ["Mechanism"]},
         "cognitive_moves": [{"move": "m", "tag": "Mechanism", "work": "w", "evidence_id": "ev_1"}],
         "claim_epistemics": [{"evidence_id": "ev_1", "status": "his bet", "when_it_fails": "z"}],
-        "what_doesnt_transfer": "the bets", "transfer_questions": [],
+        "what_doesnt_transfer": "the bets",
     })
 
     out = synthesize.synthesize_full(eid, work_root=tmp_path, profile="lecture")

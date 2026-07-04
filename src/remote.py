@@ -40,6 +40,11 @@ REMOTE_OUT = f"/home/{SSH_USER}/_lsic_out"
 REMOTE_TMP_ENV = "/tmp/.lsic_env"
 LOCAL_ENV = Path(__file__).resolve().parent.parent / ".env"
 
+# Keys topped-up onto an already-provisioned VM's .env (append-only; one mechanism for all —
+# per the complexity review, no per-key copy-paste blocks). ANTHROPIC drives the cognition
+# calls; READER_DOMAIN/CURRENT_WORK steer the reader-facing sections (DEPTH v3).
+TOPUP_KEYS = ("ANTHROPIC_API_KEY", "READER_DOMAIN", "CURRENT_WORK")
+
 
 def _local_env_has(key: str) -> bool:
     """True if the local .env defines ``key`` — so we only try to ship keys we actually hold."""
@@ -111,9 +116,9 @@ def wait_for_ssh(runner, attempts: int = 20, delay: int = 6) -> None:
 def bootstrap_vm(runner) -> None:
     """Make the VM ready, idempotently: clone the repo if absent, build the venv if absent, and
     ensure the VM's .env carries the keys the pipeline needs — GEMINI (ASR/VLM/synth) via a cold
-    whole-file push when the VM has no .env, and ANTHROPIC (the Opus cognition call) via an
-    append-only top-up when the VM has a .env but lacks that key. Never clobbers a VM .env that
-    already has the key; a fully-provisioned VM does no work (all gated)."""
+    whole-file push when the VM has no .env, and every ``TOPUP_KEYS`` entry (cognition key +
+    DEPTH v3 reader context) via an append-only top-up when the VM has a .env but lacks it.
+    Never clobbers a VM .env that already has a key; a fully-provisioned VM does no work."""
     print(f"[remote] bootstrapping {SSH_USER}@{VM} (repo/venv/.env if missing)…", flush=True)
     _ssh(runner,
          f"test -d {REMOTE_REPO} || git clone {REPO_URL} {REMOTE_REPO}; "
@@ -126,18 +131,24 @@ def bootstrap_vm(runner) -> None:
         print("[remote] pushing local .env (VM had none)…", flush=True)
         _run(runner, ["gcloud", "compute", "scp", "--tunnel-through-iap", "--zone", ZONE,
                       str(LOCAL_ENV), f"{SSH_USER}@{VM}:{REMOTE_REPO}/.env"])
-    # ANTHROPIC (warm top-up): the Opus cognition call (COGNITION_MODEL=claude-*) needs this key. A
-    # VM provisioned before DEPTH v2 has a .env with only the Gemini key → append JUST this key (its
-    # value travels in the scp'd file, never in an ssh argv) so the Opus A/B doesn't silently degrade
-    # to empty cognition. Skipped when the VM already has it or the local .env lacks it.
-    ant = _ssh(runner,
-               f"grep -q ANTHROPIC_API_KEY {REMOTE_REPO}/.env 2>/dev/null && echo HAVE_ANT || echo NO_ANT")
-    if "NO_ANT" in (ant.stdout or "") and _local_env_has("ANTHROPIC_API_KEY"):
-        print("[remote] appending ANTHROPIC_API_KEY to VM .env (for the Opus cognition call)…", flush=True)
+    # Warm top-up (append-only, generalized — DEPTH v3): keys the pipeline needs beyond GEMINI.
+    # A VM provisioned earlier has a .env missing newer keys → the whole local .env travels ONCE
+    # in an scp'd file (values never in an ssh argv) and each missing key is grep-appended.
+    # Skipped per key when the VM already has it or the local .env lacks it. This is how the
+    # v3 Transfer Questions vanished: READER_DOMAIN never reached the VM (env-parity bug class).
+    missing = []
+    for key in TOPUP_KEYS:
+        cp = _ssh(runner, f"grep -q '^{key}=' {REMOTE_REPO}/.env 2>/dev/null "
+                          f"&& echo HAVE_{key} || echo NO_{key}")
+        if f"NO_{key}" in (cp.stdout or "") and _local_env_has(key):
+            missing.append(key)
+    if missing:
+        print(f"[remote] appending {', '.join(missing)} to VM .env…", flush=True)
         _run(runner, ["gcloud", "compute", "scp", "--tunnel-through-iap", "--zone", ZONE,
                       str(LOCAL_ENV), f"{SSH_USER}@{VM}:{REMOTE_TMP_ENV}"])
-        _ssh(runner, f'grep "^ANTHROPIC_API_KEY=" {REMOTE_TMP_ENV} >> {REMOTE_REPO}/.env '
-                     f'&& rm -f {REMOTE_TMP_ENV}')
+        appends = " && ".join(f'grep "^{k}=" {REMOTE_TMP_ENV} >> {REMOTE_REPO}/.env'
+                              for k in missing)
+        _ssh(runner, f"{appends} && rm -f {REMOTE_TMP_ENV}")
 
 
 def sync_code(runner) -> None:

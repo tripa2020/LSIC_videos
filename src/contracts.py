@@ -253,10 +253,16 @@ class OperatingAlgorithm(BaseModel):
 
 
 class CognitiveMove(BaseModel):
-    """One repeatable mental move, tagged by OPERATION (not topic) + the work it does."""
+    """One repeatable mental move, tagged by OPERATION (not topic) + the work it does.
+    v3 adds the verbatim quote (EVAL string-matches it against the transcript — the
+    deterministic hallucination check), the survivorship boundary, and the per-move
+    reusable self-question (the reader-domain conversion, formerly a separate section)."""
     move: str = ""
+    quote: str = ""            # smallest EXACT transcript span supporting the move (v3)
     tag: str = ""
-    work: str = ""
+    work: str = ""             # 2-3 substantive sentences (v3; was capped at one)
+    fails_when: str = ""       # boundary condition where running this move backfires (v3)
+    self_question: str = ""    # reusable question the reader asks themselves (v3)
     evidence_id: str = ""
 
 
@@ -276,10 +282,57 @@ class TransferQuestion(BaseModel):
     evidence_id: str = ""
 
 
-class CognitionOutput(BaseModel):
-    """The dedicated-cognition-call result (merged into the lecture thematic dict before render)."""
+class FounderPlay(BaseModel):
+    """One Founder Lens entry — a venture-relevant idea synthesized ACROSS the talk (v3).
+    NOT 1:1 per move: forcing an entry per move produces filler wedges."""
+    idea: str = ""
+    from_moves: list[str] = Field(default_factory=list)
+    wedge: str = ""            # ONE sentence: segment + urgent pain + why-now + access
+    action: str = ""           # the Monday-morning step
+    learn: str = ""            # the specific gap to close first
+    deeper: str = ""           # 1-2 NAMED places to dig (papers / people / products)
+    evidence_id: str = ""
+
+
+class RetrievalPrompt(BaseModel):
+    """One effortful retrieval Q/A for the Learn-It section (Matuschak rules: forces recall
+    from memory, never yes/no, never enumerations, one atomic idea)."""
+    q: str = ""
+    a: str = ""
+    evidence_id: str = ""
+
+
+class LearnIt(BaseModel):
+    """How to Learn It (So It Sticks) — concrete artifacts, not advice (v3)."""
+    retrieval_prompts: list[RetrievalPrompt] = Field(default_factory=list)
+    first_order_terms: list[str] = Field(default_factory=list)
+    buildable_artifact: str = ""   # ONE minimal self-contained build + success criterion
+
+
+class ExtractOutput(BaseModel):
+    """Pass-1 EXTRACT half (speaker-facing) — validated per-pass by src/cognition.py."""
     operating_algorithm: OperatingAlgorithm = Field(default_factory=OperatingAlgorithm)
     cognitive_moves: list[CognitiveMove] = Field(default_factory=list)
     claim_epistemics: list[ClaimEpistemic] = Field(default_factory=list)
     what_doesnt_transfer: str = ""
-    transfer_questions: list[TransferQuestion] = Field(default_factory=list)
+
+
+class ConvertOutput(BaseModel):
+    """Pass-2 CONVERT half (reader-facing) — validated per-pass by src/cognition.py."""
+    founder_lens: list[FounderPlay] = Field(default_factory=list)
+    learn_it: LearnIt = Field(default_factory=LearnIt)
+
+
+class CognitionOutput(BaseModel):
+    """The cognition-layer result merged into the lecture thematic dict before render.
+    v3: ONE downstream contract — the convert-pass fields are optional-default-empty, so
+    "absent ⇒ section omitted" falls out of the defaults; ``cognition_status`` is the
+    VISIBLE degrade note (empty = healthy) that replaces v2's silent ``{}`` degrade."""
+    operating_algorithm: OperatingAlgorithm = Field(default_factory=OperatingAlgorithm)
+    cognitive_moves: list[CognitiveMove] = Field(default_factory=list)
+    claim_epistemics: list[ClaimEpistemic] = Field(default_factory=list)
+    what_doesnt_transfer: str = ""
+    transfer_questions: list[TransferQuestion] = Field(default_factory=list)   # pre-v3 bundles
+    founder_lens: list[FounderPlay] = Field(default_factory=list)              # v3 CONVERT
+    learn_it: LearnIt = Field(default_factory=LearnIt)                          # v3 CONVERT
+    cognition_status: str = ""                                                  # v3 visible degrade

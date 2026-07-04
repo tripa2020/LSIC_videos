@@ -23,12 +23,13 @@ def _classify(cmd) -> str:
     if "instances start" in s:         return "start"
     if "instances stop" in s:          return "stop"
     if "echo ok" in s:                 return "sshprobe"   # post-start ssh-readiness poll
-    if "scp" in s and ".lsic_env" in s: return "antscp"     # ANTHROPIC top-up file (before envpush)
+    if "scp" in s and ".lsic_env" in s: return "topupscp"   # key top-up file (before envpush)
     if "scp" in s and ".env" in s:     return "envpush"
     if "scp" in s:                     return "scp"
-    if "ANTHROPIC_API_KEY" in s and ("HAVE_ANT" in s or "NO_ANT" in s): return "antcheck"
-    if "ANTHROPIC_API_KEY" in s:       return "antappend"   # grep ANTHROPIC… >> .env
-    if "GEMINI_API_KEY" in s:          return "envcheck"
+    if "GEMINI_API_KEY" in s:          return "envcheck"    # cold-start whole-file gate
+    if "echo HAVE_" in s:              # generalized per-key presence probe (TOPUP_KEYS)
+        return "keycheck:" + s.split("echo HAVE_", 1)[1].split()[0]
+    if ">>" in s and ".env" in s:      return "keyappend"   # grep "^KEY=" tmp >> .env (chained)
     if "git clone" in s or "vm_setup.sh" in s: return "bootstrap"
     if "git fetch" in s:               return "sync"
     if "--source" in s:                return "run"
@@ -36,12 +37,14 @@ def _classify(cmd) -> str:
 
 
 class FakeRunner:
-    """Records each gcloud call as a classified op; returns canned describe status + env state."""
-    def __init__(self, status="RUNNING", fail_on=None, have_env=True, have_ant=True, probe_fail=0):
+    """Records each gcloud call as a classified op; returns canned describe status + env state.
+    ``missing_keys`` = TOPUP_KEYS the fake VM's .env lacks (default: it has them all)."""
+    def __init__(self, status="RUNNING", fail_on=None, have_env=True, missing_keys=(),
+                 probe_fail=0):
         self.status = status
         self.fail_on = fail_on
         self.have_env = have_env
-        self.have_ant = have_ant
+        self.missing_keys = set(missing_keys)
         self.probe_fail = probe_fail
         self._probes = 0
         self.ops: list[str] = []
@@ -60,8 +63,9 @@ class FakeRunner:
             out = self.status
         elif op == "envcheck":
             out = "HAVE_ENV" if self.have_env else "NO_ENV"
-        elif op == "antcheck":
-            out = "HAVE_ANT" if self.have_ant else "NO_ANT"
+        elif op.startswith("keycheck:"):
+            key = op.split(":", 1)[1]
+            out = f"NO_{key}" if key in self.missing_keys else f"HAVE_{key}"
         else:
             out = ""
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
@@ -153,27 +157,43 @@ def test_ssh_probe_exhaustion_still_stops_vm(monkeypatch):
     assert r.ops[-1] == "stop"                           # finally still stopped the VM
 
 
-# --- ANTHROPIC key top-up (Opus cognition) ---
+# --- .env key top-up (cognition key + DEPTH v3 reader context — one mechanism for all) ---
 
-def test_anthropic_key_appended_when_vm_lacks_it(monkeypatch):
-    monkeypatch.setattr(remote, "_local_env_has", lambda k: True)   # local .env has the key
-    r = FakeRunner(status="RUNNING", have_ant=False)                # VM lacks it
+def test_missing_keys_appended_when_vm_lacks_them(monkeypatch):
+    monkeypatch.setattr(remote, "_local_env_has", lambda k: True)   # local .env has them all
+    r = FakeRunner(status="RUNNING", missing_keys=set(remote.TOPUP_KEYS))
     remote.remote_run("https://youtu.be/x", out=None, runner=r)
-    assert "antscp" in r.ops and "antappend" in r.ops               # scp file up, append the line
-    assert r.ops.index("antappend") < r.ops.index("run")           # before the pipeline runs
+    assert "topupscp" in r.ops and "keyappend" in r.ops             # ONE scp, ONE chained append
+    assert r.ops.count("topupscp") == 1 and r.ops.count("keyappend") == 1
+    assert r.ops.index("keyappend") < r.ops.index("run")            # before the pipeline runs
+    append_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "keyappend")
+    for key in remote.TOPUP_KEYS:                                   # every missing key rides it
+        assert f"^{key}=" in append_cmd
 
 
-def test_anthropic_key_untouched_when_vm_has_it():
-    r = FakeRunner(status="RUNNING", have_ant=True)
+def test_keys_untouched_when_vm_has_them():
+    r = FakeRunner(status="RUNNING")                                # nothing missing
     remote.remote_run("https://youtu.be/x", out=None, runner=r)
-    assert "antscp" not in r.ops and "antappend" not in r.ops
+    assert "topupscp" not in r.ops and "keyappend" not in r.ops
 
 
-def test_anthropic_not_appended_when_local_lacks_key(monkeypatch):
-    monkeypatch.setattr(remote, "_local_env_has", lambda k: False)  # can't ship a key we don't have
-    r = FakeRunner(status="RUNNING", have_ant=False)
+def test_key_not_appended_when_local_lacks_it(monkeypatch):
+    # only ship keys the local .env actually holds — a missing local key is skipped, the rest ride
+    monkeypatch.setattr(remote, "_local_env_has", lambda k: k == "ANTHROPIC_API_KEY")
+    r = FakeRunner(status="RUNNING",
+                   missing_keys={"ANTHROPIC_API_KEY", "READER_DOMAIN"})
     remote.remote_run("https://youtu.be/x", out=None, runner=r)
-    assert "antappend" not in r.ops
+    append_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "keyappend")
+    assert "^ANTHROPIC_API_KEY=" in append_cmd
+    assert "READER_DOMAIN" not in append_cmd
+
+
+def test_reader_context_keys_are_topped_up():
+    # the DEPTH v3 env-parity fix: the reader context is IN the top-up set (this absence is
+    # exactly how the v3 Transfer Questions silently vanished on the VM)
+    assert "READER_DOMAIN" in remote.TOPUP_KEYS
+    assert "CURRENT_WORK" in remote.TOPUP_KEYS
+    assert "ANTHROPIC_API_KEY" in remote.TOPUP_KEYS
 
 
 # --- branch selection (verify a feature branch on the VM before merge) ---

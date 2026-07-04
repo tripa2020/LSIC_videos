@@ -41,11 +41,8 @@ THINKING_BUDGET = 0 if "flash" in SYNTH_MODEL else 4096
 MAX_OUTPUT_TOKENS = 8000
 TRANSCRIPT_INPUT_CAP_CHARS = 80_000   # safety cap; full M5 chunks per-section
 
-# DEPTH v2: default model for the dedicated lecture cognition call. The env var `COGNITION_MODEL`
-# overrides it AT CALL TIME (read inside _call_cognition, after load_dotenv) — so a shell export OR
-# a .env entry both work, e.g. `COGNITION_MODEL=gemini-2.5-pro python -m src.main ...` for A/B.
-# `claude-*` → the scoped Anthropic caller (Opus 4.8); any other value → the Gemini path.
-COGNITION_MODEL = "claude-opus-4-8"
+# DEPTH v3: the cognition layer lives in src/cognition.py (two-pass extract→convert,
+# COGNITION_MODEL default claude-fable-5, resolved at call time inside cognition.run).
 
 SYSTEM_PROMPT = """You write technical engineering briefings from meeting transcripts for C'mander Alex.
 
@@ -589,41 +586,6 @@ class SynthesisContext:
     current_work: str = ""
 
 
-def _call_cognition(ctx: "SynthesisContext", claims: Optional[list] = None,
-                    model: Optional[str] = None) -> dict:
-    """The dedicated cognition pass (DEPTH v2). The model is resolved AT CALL TIME from
-    ``COGNITION_MODEL`` (env, after dotenv) → ``claude-*`` routes to the scoped Anthropic caller
-    (Opus 4.8 default), anything else to Gemini (A/B isolation). ``claims`` are the descriptive
-    notable_claims handed in so the cognition call tags THOSE exact claims by evidence_id (so the
-    epistemic overlay actually lands). Degrades to ``{}`` on any failure — the descriptive notes
-    still render, the cognition sections + overlay simply absent."""
-    from src.profiles import lecture
-    from src.contracts import CognitionOutput
-    load_dotenv()                                    # .env COGNITION_MODEL works alongside shell env
-    model = model or os.environ.get("COGNITION_MODEL", COGNITION_MODEL)
-    print(f"  [synthesize] cognition synthesis ({model})…", flush=True)
-    system = lecture.cognition_prompt(ctx.reader_domain, ctx.current_work)
-    context = _build_event_context(ctx.alignment, ctx.evidence)
-    user = (f"=== EVENT CONTEXT (per-section transcript) ===\n{context}\n\n"
-            f"Produce the cognition JSON object now. Every cited evidence_id must be present above.")
-    claim_lines = "\n".join(f"[{c.get('evidence_id')}] {(c.get('text') or '').strip()}"
-                            for c in (claims or []) if c.get("evidence_id"))
-    if claim_lines:
-        user += ("\n\n=== CLAIMS TO TAG (emit one claim_epistemic per claim, keyed by its "
-                 f"evidence_id) ===\n{claim_lines}")
-    try:
-        if model.startswith("claude"):
-            from src import anthropic_caller
-            data = anthropic_caller.call_json(system, user, model=model)
-        else:
-            data = _call_gemini_json(ctx.client, system, user, max_tokens=16000, model=model)
-        return CognitionOutput.model_validate(data).model_dump()
-    except Exception as e:
-        print(f"  [cognition] FAILED ({model}): {type(e).__name__}: {e} — degrading "
-              f"(cognition sections omitted)", flush=True)
-        return {}
-
-
 def briefing_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
     """The briefing profile owns its synthesis: per-presentation calls + the thematic assembly —
     **today's code, verbatim** (byte-identical LSIC path; no cognition call)."""
@@ -645,14 +607,17 @@ def briefing_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
 
 
 def lecture_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
-    """The lecture profile owns its synthesis: a DESCRIPTIVE thematic pass (Gemini) + a dedicated
-    COGNITION call (Opus 4.8 by default), merged. No presentations, no role pool.
+    """The lecture profile owns its synthesis: a DESCRIPTIVE thematic pass (Gemini) + the
+    DEPTH v3 cognitive core (src/cognition.py — two-pass extract→convert, Fable 5 by default),
+    merged. No presentations, no role pool.
 
     MAPRED: on a LONG talk (transcript > WINDOW_BUDGET ⇒ ≥2 size-bounded windows) the descriptive
     pass is map-reduced — each window extracts local facts, then one REDUCE weaves every global
-    section once — which removes the 140k single-call truncation. A short talk (≤1 window) takes
-    today's single call, byte-identical (degrade-to-today). The cognition call is unchanged."""
+    section once. The cognition passes take the FULL transcript in one context (cap =
+    cognition.CONTEXT_CAP, a ~900k-token sanity guard) — the old 140k cap physically hid the
+    last hour of a long talk (no move ever cited past [83:33] of the 146-min A/B talk)."""
     from src.profiles import lecture
+    from src import cognition
     from src import segment as _segment
     windows = _segment.segment(ctx.evidence)
     if len(windows) >= 2:
@@ -663,8 +628,11 @@ def lecture_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
         print("  [synthesize] thematic synthesis (descriptive, 1 call)…", flush=True)
         thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
                                   system_prompt=lecture.thematic_prompt())
-    # hand the descriptive claims to the cognition call so it tags THOSE by evidence_id
-    thematic.update(_call_cognition(ctx, claims=thematic.get("notable_claims") or []))
+    # hand the descriptive claims to the cognition layer so it tags THOSE by evidence_id
+    full_ctx = _build_event_context(ctx.alignment, ctx.evidence, cap=cognition.CONTEXT_CAP)
+    thematic.update(cognition.run(full_ctx, claims=thematic.get("notable_claims") or [],
+                                  reader_domain=ctx.reader_domain,
+                                  current_work=ctx.current_work))
     return thematic, []
 
 

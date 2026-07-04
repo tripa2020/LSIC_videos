@@ -12,7 +12,7 @@ Contract under test
 """
 import types
 
-from src import synth_mapreduce, synthesize
+from src import cognition, synth_mapreduce, synthesize
 from src.contracts import Evidence
 from src.segment import Window
 
@@ -97,7 +97,7 @@ def test_lecture_long_talk_routes_to_mapreduce(monkeypatch):
     systems = []
     monkeypatch.setattr(synthesize, "_call_gemini_json",
                         lambda c, system, user, max_tokens=0, model="": systems.append(system) or {})
-    monkeypatch.setattr(synthesize, "_call_cognition", lambda ctx, claims=None, model=None: {})
+    monkeypatch.setattr(cognition, "run", lambda context, claims=None, **kw: {})
     monkeypatch.setenv("WINDOW_BUDGET", "5")    # any 2 items exceed 5 chars → ≥2 windows
     synthesize.lecture_synthesize(_lecture_ctx([_ev(i, i, "hello world") for i in range(3)]))
     assert synth_mapreduce.MAP_SYSTEM_PROMPT in systems
@@ -107,7 +107,7 @@ def test_lecture_short_talk_routes_to_single_call(monkeypatch):
     systems = []
     monkeypatch.setattr(synthesize, "_call_gemini_json",
                         lambda c, system, user, max_tokens=0, model="": systems.append(system) or {})
-    monkeypatch.setattr(synthesize, "_call_cognition", lambda ctx, claims=None, model=None: {})
+    monkeypatch.setattr(cognition, "run", lambda context, claims=None, **kw: {})
     monkeypatch.setenv("WINDOW_BUDGET", "100000")
     synthesize.lecture_synthesize(_lecture_ctx([_ev(0, 0, "hello world")]))
     assert synth_mapreduce.MAP_SYSTEM_PROMPT not in systems   # today's single descriptive call

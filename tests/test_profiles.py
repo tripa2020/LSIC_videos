@@ -206,21 +206,25 @@ def test_lecture_render_orphan_epistemic_surfaced():
     assert "↳ *fails when:* in low-data regimes" in md
 
 
-def test_cognition_prompt_reader_domain(monkeypatch):
-    monkeypatch.delenv("READER_DOMAIN", raising=False)
-    monkeypatch.delenv("CURRENT_WORK", raising=False)
+def test_cognition_prompt_reader_domain():
+    from src import cognition
     # the DESCRIPTIVE prompt is reader-agnostic and NO cognition field may leak into it (else the
     # crowding-out the split prevents creeps back)
     desc = lecture.thematic_prompt()
     assert "READER DOMAIN" not in desc
     for fld in ("operating_algorithm", "cognitive_moves", "claim_epistemics",
-                "what_doesnt_transfer", "transfer_questions"):
+                "what_doesnt_transfer", "founder_lens", "learn_it"):
         assert fld not in desc, f"{fld} leaked into the descriptive prompt"
-    # the COGNITION prompt threads reader_domain (+ current_work → project-level)
-    p_none = lecture.cognition_prompt()
-    assert "empty transfer_questions list" in p_none
+    # v3: no-domain is GENERIC, never empty — the v2 "return an empty list" rule is what let the
+    # section silently vanish when the VM never saw READER_DOMAIN
+    p_none = cognition.extract_prompt("", "")
+    assert "DOMAIN-GENERIC" in p_none
     assert "operating_algorithm" in p_none and "claim_epistemics" in p_none
-    p_rd = lecture.cognition_prompt("embedded / robotics")
+    assert "empty transfer_questions list" not in p_none
+    c_none = cognition.convert_prompt("", "")
+    assert "generic technical founder" in c_none
+    # explicit reader context threads domain (+ current_work → project-level) into BOTH passes
+    p_rd = cognition.extract_prompt("embedded / robotics")
     assert "READER DOMAIN: embedded / robotics" in p_rd
-    p_cw = lecture.cognition_prompt("robotics", "my Teensy firmware bring-up")
+    p_cw = cognition.convert_prompt("robotics", "my Teensy firmware bring-up")
     assert "PROJECT-level" in p_cw and "Teensy firmware" in p_cw
