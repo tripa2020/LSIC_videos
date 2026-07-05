@@ -14,6 +14,7 @@ Idempotent: each event/paper writes a manifest.json that short-circuits reruns.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -173,6 +174,13 @@ def _fetch_with_retry(fetch, url: str, dest: Path) -> None:
 
 
 def _fetch_youtube(url: str, dest: Path) -> None:
+    # Modern YouTube serves video+audio as separate streams; yt-dlp needs ffmpeg to merge
+    # them and — the trap — without it, it downloads the parts, skips the merge with only a
+    # WARNING, and exits 0 having never produced ``dest`` (observed 2026-07-05: four videos
+    # "failed" with 'fetch produced no file' on a machine without ffmpeg). Fail loud instead.
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg not found — required to merge YouTube streams "
+                           "(macOS: brew install ffmpeg)")
     # strip ?t= so we always pull the whole recording (presentations are windows)
     clean = url.split("&")[0].split("?t=")[0]
     # 480p: ASR audio is unaffected, keyframes stay legible, downloads ~6x smaller.

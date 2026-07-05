@@ -94,6 +94,13 @@ def test_fetch_first_try_success_is_zero_cost(monkeypatch, tmp_path):
     assert slept == []                                          # degrade-to-today
 
 
+def test_fetch_youtube_fails_loud_without_ffmpeg(monkeypatch, tmp_path):
+    # without ffmpeg yt-dlp "succeeds" while never producing the merged file — guard first
+    monkeypatch.setattr(ingest.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="ffmpeg not found"):
+        ingest._fetch_youtube("https://youtu.be/x", tmp_path / "v.mp4")
+
+
 def test_fetch_dead_url_still_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(ingest.time, "sleep", lambda *_: None)
     def dead(url, dest):
