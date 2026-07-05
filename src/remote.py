@@ -209,7 +209,17 @@ def _launch_and_poll(runner, launch_body: str, done_test: str, poll_limit: int,
     Fable cognition pass thinks for minutes with no output) — a blocking ssh killed the first
     v4.1 run mid-job and its stdout (incl. the cost lines) died with the channel. The only
     cross-poll state is the last-printed PROGRESS line (CR3 — no stall state machine)."""
-    _ssh(runner, f"{launch_body} > {REMOTE_LOG} 2>&1 < /dev/null & echo LAUNCHED")
+    # Fire-and-forget launch: observed 2026-07-05 (first acceptance batch) — gcloud's IAP ssh
+    # can HOLD the session for the detached job's lifetime and then exit 255, which says
+    # nothing about the job. So: a hard local timeout kills the gcloud process (the remote job
+    # is already detached and survives), any exit code is accepted, and the first poll's
+    # POLL_DEAD is the real launch-failure detector.
+    try:
+        _ssh(runner, f"{launch_body} > {REMOTE_LOG} 2>&1 < /dev/null & echo LAUNCHED",
+             check=False, timeout=120)
+    except subprocess.TimeoutExpired:
+        print("  [remote] launch ssh still holding after 120s — assuming detached; "
+              "the poll will verify", flush=True)
     probe = ((f"cat {progress_path} 2>/dev/null; " if progress_path else "")
              + f"{done_test} && echo POLL_DONE || "
                f"(pgrep -f '[s]rc.main' >/dev/null && echo POLL_RUNNING || echo POLL_DEAD)")
@@ -293,4 +303,8 @@ def remote_run(source: str | None, *, out=None, profile: str | None = None,
         return 0
     finally:
         if not keep_up:
-            stop_vm(runner)
+            try:
+                stop_vm(runner)
+            except Exception as e:   # a failed stop must never mask the real error/result
+                print(f"[remote] WARNING: VM auto-stop failed ({e}) — stop it manually: "
+                      f"gcloud compute instances stop {VM} --zone {ZONE}", flush=True)

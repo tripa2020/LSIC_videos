@@ -43,9 +43,10 @@ class FakeRunner:
     """Records each gcloud call as a classified op; returns canned describe status + env state.
     ``missing_keys`` = TOPUP_KEYS the fake VM's .env lacks (default: it has them all)."""
     def __init__(self, status="RUNNING", fail_on=None, have_env=True, missing_keys=(),
-                 probe_fail=0, poll_states=None):
+                 probe_fail=0, poll_states=None, timeout_on=None):
         self.status = status
         self.fail_on = fail_on
+        self.timeout_on = timeout_on
         self.have_env = have_env
         self.missing_keys = set(missing_keys)
         self.probe_fail = probe_fail
@@ -58,8 +59,12 @@ class FakeRunner:
         op = _classify(cmd)
         self.ops.append(op)
         self.cmds.append(" ".join(map(str, cmd)))
+        if op == self.timeout_on:
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout") or 120)
         if op == self.fail_on:
-            raise RuntimeError("boom")
+            if kw.get("check", True):
+                raise RuntimeError("boom")
+            return subprocess.CompletedProcess(cmd, 255, stdout="", stderr="boom")
         if op == "sshprobe" and self._probes < self.probe_fail:
             self._probes += 1
             raise subprocess.CalledProcessError(255, cmd)    # VM not ssh-ready yet
@@ -92,11 +97,35 @@ def test_remote_run_scp_when_out_set(tmp_path):
     assert r.ops.index("run") < r.ops.index("scp") < r.ops.index("stop")
 
 
-def test_auto_stop_on_failure():
-    r = FakeRunner(status="RUNNING", fail_on="run")     # job raises
+def test_auto_stop_on_failure(monkeypatch):
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="RUNNING", fail_on="poll")    # orchestration dies mid-poll
     with pytest.raises(RuntimeError):
         remote.remote_run("https://youtu.be/x", out=None, runner=r)
     assert r.ops[-1] == "stop"                          # finally still stopped the VM
+
+
+def test_launch_255_is_tolerated(monkeypatch):
+    # 2026-07-05 acceptance-run lesson: gcloud IAP ssh can exit 255 AFTER detaching the job —
+    # the launch is fire-and-forget; the poll decides health
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="RUNNING", fail_on="run", poll_states=["POLL_DONE"])
+    assert remote.remote_run("https://youtu.be/x", out=None, runner=r) == 0
+
+
+def test_launch_ssh_hold_timeout_is_tolerated(monkeypatch):
+    # ...and it can HOLD the session past any reasonable launch time — the local timeout kills
+    # gcloud, the detached remote job survives, polling verifies
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="RUNNING", timeout_on="run", poll_states=["POLL_RUNNING", "POLL_DONE"])
+    assert remote.remote_run("https://youtu.be/x", out=None, runner=r) == 0
+
+
+def test_stop_failure_warns_but_preserves_result(capsys):
+    r = FakeRunner(status="RUNNING", fail_on="stop")
+    rc = remote.remote_run("https://youtu.be/x", out=None, runner=r)
+    assert rc == 0                                      # a failed stop never masks the result
+    assert "auto-stop failed" in capsys.readouterr().out
 
 
 def test_keep_up_skips_stop():
