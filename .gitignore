@@ -27,3 +27,5 @@ download_lsic/recon_artifacts/
 # workspace agent tooling (skills/hooks/archive/personal config) — not project code
 .claude/
 .coverage
+Report_all/
+links.txt

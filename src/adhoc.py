@@ -138,3 +138,74 @@ def run_adhoc(source: str, *, out: Optional[Path] = None, profile: Optional[str]
     if rc == 0 and out is not None:
         report_mod.assemble_report(event.event_id, work_root=work_root, dest_dir=Path(out))
     return rc
+
+
+# ── RUNEASY: the one-command multi-video front door ────────────────────────────────────────────
+
+def _parse_links(text: str) -> list[str]:
+    """Strict links.txt template: one URL per line; blank lines and ``#`` comments ignored;
+    duplicates dropped (the same URL twice is one cached event anyway). A function, not a
+    module (CR4)."""
+    urls: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line not in urls:
+            urls.append(line)
+    return urls
+
+
+def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
+                   redo: bool = False, work_root: Path = WORK_ROOT,
+                   run_one: Optional[Callable] = None) -> int:
+    """The ONE list loop (CR1) — this same code runs locally and, in remote mode, ON the VM
+    (`--source-list … --local`). Per-URL no-drop (a failing video logs ❌ and the loop
+    continues — FIX semantics); **skip-completed resume** (a subfolder with notes.md is done;
+    ``redo`` overrides); writes ``PROGRESS`` (`n/total <video_id>`) as it goes and a
+    ``BATCH_DONE`` sentinel at the end — the remote poller's whole interface (CR2/CR3).
+    Exit is 0 with failures reported in the tally, never a batch-aborting code."""
+    run_one = run_one or run_adhoc
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    urls = _parse_links(Path(list_file).read_text())
+    if not urls:
+        print(f"[run-all] no links found in {list_file}", flush=True)
+        return 1
+    total, results = len(urls), []          # results: (video_id, "ok"|"skip"|"fail")
+    for i, url in enumerate(urls, 1):
+        vid = mint_event_id(None, url, date.today())
+        sub = out / vid
+        (out / "PROGRESS").write_text(f"{i}/{total} {vid}\n")
+        if not redo and (sub / "notes.md").exists():
+            print(f"[run-all] {i}/{total} {vid} … SKIP (already complete)", flush=True)
+            results.append((vid, "skip"))
+            continue
+        print(f"[run-all] {i}/{total} {vid} ← {url}", flush=True)
+        try:
+            rc = run_one(url, out=sub, profile=profile, work_root=work_root)
+        except Exception as e:              # no-drop: one bad video never kills the batch
+            print(f"[run-all] ❌ {vid} ({type(e).__name__}: {e})", flush=True)
+            rc = 1
+        results.append((vid, "ok" if rc == 0 else "fail"))
+    _print_batch_summary(out, results)
+    (out / "BATCH_DONE").write_text("done\n")
+    return 0
+
+
+def _gates_of(sub: Path) -> str:
+    """EVAL gate column for the tally — reported, not enforced (Q2)."""
+    try:
+        g = json.loads((sub / "coverage_report.json").read_text())["gates"]
+        return f"{sum(g.values())}/{len(g)}"
+    except Exception:
+        return "-"
+
+
+def _print_batch_summary(out: Path, results: list[tuple[str, str]]) -> None:
+    mark = {"ok": "✅", "skip": "⏭", "fail": "❌"}
+    n = {s: sum(1 for _, r in results if r == s) for s in ("ok", "skip", "fail")}
+    print(f"[run-all] done — ✅ {n['ok']} ok · ⏭ {n['skip']} skipped · ❌ {n['fail']} failed",
+          flush=True)
+    for vid, r in results:
+        print(f"  {mark[r]} {vid}  gates {_gates_of(out / vid)}", flush=True)

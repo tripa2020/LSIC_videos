@@ -529,6 +529,11 @@ def main() -> int:
                    help="M2.5 thin: single Claude call → notes.md from existing transcript")
     g.add_argument("--source", type=str, default=None, metavar="URL|PATH",
                    help="ad-hoc: a YouTube URL or local video file → full pipeline → Report/")
+    g.add_argument("--source-list", type=str, nargs="?", const="links.txt", default=None,
+                   metavar="FILE",
+                   help="RUNEASY: run EVERY link in FILE (default links.txt — one URL per "
+                        "line, # comments). Remote by default (--local opts out); resumes by "
+                        "skipping completed <out>/<video_id>/ subfolders (--redo overrides)")
     g.add_argument("--enrich", action="store_true",
                    help="M3: related-paper enrichment → references.md (use --event)")
     g.add_argument("--validate-notes", type=str, default=None, metavar="PATH",
@@ -564,6 +569,10 @@ def main() -> int:
                         help="--source: run the job on the on-demand VM (start→run→scp back→auto-stop)")
     parser.add_argument("--keep-up", action="store_true",
                         help="--source --remote: leave the VM running after the job (skip auto-stop)")
+    parser.add_argument("--local", action="store_true",
+                        help="--source-list: run the batch on THIS machine instead of the VM")
+    parser.add_argument("--redo", action="store_true",
+                        help="--source-list: re-run videos whose output subfolder is already complete")
     args = parser.parse_args()
     cap_sec = args.cap_video_hours * 3600.0 if args.cap_video_hours else None
 
@@ -594,6 +603,23 @@ def main() -> int:
         return synthesize_cmd(args.event, args.max_sec)
     if args.enrich:
         return enrich_cmd(args.event)
+    if args.source_list:
+        # RUNEASY front door: baked defaults (lecture profile; the adhoc path already forces
+        # references on), remote by default, resume via skip-completed subfolders.
+        src_list = Path(args.source_list)
+        if not src_list.exists():
+            print(f"[run-all] links file not found: {src_list} — create it with one URL "
+                  f"per line (# comments ok), then re-run", flush=True)
+            return 1
+        out = args.out or Path("Report_all")
+        profile = args.profile or "lecture"
+        if args.local:
+            from src import adhoc
+            return adhoc.run_adhoc_list(Path(args.source_list), out=out, profile=profile,
+                                        redo=args.redo)
+        from src import remote
+        return remote.remote_run(None, out=out, profile=profile, keep_up=args.keep_up,
+                                 source_list=Path(args.source_list), redo=args.redo)
     if args.source:
         if args.remote:
             from src import remote

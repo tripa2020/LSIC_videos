@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# RUNEASY front door: run every link in links.txt (plans/SYNTH_QUALITY_PLAN.md).
+# A pure alias — execs the single --source-list command path, nothing else.
+exec "${PY:-python}" -m src.main --source-list "$@"

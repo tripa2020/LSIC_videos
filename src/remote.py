@@ -38,6 +38,7 @@ REPO_URL = os.environ.get("LSIC_REPO_URL", "https://github.com/tripa2020/LSIC_vi
 REMOTE_REPO = f"/home/{SSH_USER}/LSIC_videos"
 REMOTE_OUT = f"/home/{SSH_USER}/_lsic_out"
 REMOTE_LOG = f"/home/{SSH_USER}/_lsic_run.log"
+REMOTE_LINKS = f"/home/{SSH_USER}/_lsic_links.txt"
 REMOTE_TMP_ENV = "/tmp/.lsic_env"
 POLL_SECS = 60      # between job-status polls (each poll is its own short-lived ssh)
 POLL_LIMIT = 90     # give a job ≤ 90 polls (~90 min) before declaring it hung
@@ -176,30 +177,60 @@ def run_remote_job(runner, source: str, profile: str | None = None) -> None:
         stage_dir = f"work/events/{eid}/{util.STAGE_BRIEFING}"
         prep = f"rm -rf {stage_dir} && "
         print(f"[remote] redo: clearing {stage_dir} so synth re-runs…", flush=True)
-    # Detached launch + poll (FIX, 2026-07-04): gcloud's IAP ssh drops on long silent
-    # stretches (a Fable cognition pass thinks for minutes with no output) — a blocking ssh
-    # killed the first v4.1 run mid-job and its stdout (incl. the cost lines) died with the
-    # channel. nohup + a VM-side log + short-lived poll sshes make the job immune to any one
-    # dropped connection; the log tail is surfaced locally either way.
-    _ssh(runner,
-         f"cd {REMOTE_REPO} && {prep}rm -rf {REMOTE_OUT} && "
-         f"nohup env PY=./.venv/bin/python ./.venv/bin/python -m src.main "
-         f"--source '{source}'{prof} --out {REMOTE_OUT} "
-         f"> {REMOTE_LOG} 2>&1 < /dev/null & echo LAUNCHED")
-    for _ in range(POLL_LIMIT):
-        cp = _ssh(runner,
-                  f"test -f {REMOTE_OUT}/notes.md && echo POLL_DONE || "
-                  f"(pgrep -f '[s]rc.main' >/dev/null && echo POLL_RUNNING || echo POLL_DEAD)")
+    launch = (f"cd {REMOTE_REPO} && {prep}rm -rf {REMOTE_OUT} && "
+              f"nohup env PY=./.venv/bin/python ./.venv/bin/python -m src.main "
+              f"--source '{source}'{prof} --out {REMOTE_OUT}")
+    _launch_and_poll(runner, launch, f"test -f {REMOTE_OUT}/notes.md", POLL_LIMIT)
+
+
+def run_remote_batch(runner, source_list: Path, profile: str = "lecture",
+                     redo: bool = False, n_links: int = 1) -> None:
+    """RUNEASY remote: push the links FILE to the VM (never URL-in-ssh-argv — the quoting/
+    injection surface, Q6) and run the SAME list loop there (`--source-list … --local`, CR1).
+    The loop's PROGRESS/BATCH_DONE files are the whole poll interface (CR2); the deadline
+    scales with list length (CR3). REMOTE_OUT is NOT wiped — skip-completed resume needs the
+    finished subfolders; only stale sentinels are cleared."""
+    _run(runner, ["gcloud", "compute", "scp", "--tunnel-through-iap", "--zone", ZONE,
+                  str(source_list), f"{SSH_USER}@{VM}:{REMOTE_LINKS}"])
+    redo_flag = " --redo" if redo else ""
+    launch = (f"cd {REMOTE_REPO} && rm -f {REMOTE_OUT}/BATCH_DONE {REMOTE_OUT}/PROGRESS && "
+              f"nohup env PY=./.venv/bin/python ./.venv/bin/python -m src.main "
+              f"--source-list {REMOTE_LINKS} --local{redo_flag} --profile {profile} "
+              f"--out {REMOTE_OUT}")
+    _launch_and_poll(runner, launch, f"test -f {REMOTE_OUT}/BATCH_DONE",
+                     POLL_LIMIT * max(1, n_links), progress_path=f"{REMOTE_OUT}/PROGRESS")
+
+
+def _launch_and_poll(runner, launch_body: str, done_test: str, poll_limit: int,
+                     progress_path: str | None = None) -> None:
+    """The ONE detached-launch + stateless-poll machine (FIX pattern; CR2) shared by the
+    single-source job and the RUNEASY batch — callers differ only in launch command, done
+    test, and deadline. Why detached: gcloud's IAP ssh drops on long silent stretches (a
+    Fable cognition pass thinks for minutes with no output) — a blocking ssh killed the first
+    v4.1 run mid-job and its stdout (incl. the cost lines) died with the channel. The only
+    cross-poll state is the last-printed PROGRESS line (CR3 — no stall state machine)."""
+    _ssh(runner, f"{launch_body} > {REMOTE_LOG} 2>&1 < /dev/null & echo LAUNCHED")
+    probe = ((f"cat {progress_path} 2>/dev/null; " if progress_path else "")
+             + f"{done_test} && echo POLL_DONE || "
+               f"(pgrep -f '[s]rc.main' >/dev/null && echo POLL_RUNNING || echo POLL_DEAD)")
+    last_progress = ""
+    for _ in range(poll_limit):
+        cp = _ssh(runner, probe)
         state = cp.stdout or ""
+        if progress_path:
+            prog = state.split("POLL_", 1)[0].strip()
+            if prog and prog != last_progress:
+                print(f"  [vm] {prog}", flush=True)
+                last_progress = prog
         if "POLL_DONE" in state:
             break
         if "POLL_DEAD" in state:
             _print_remote_log(runner)
-            raise RuntimeError("remote job died before producing the bundle (log tail above)")
+            raise RuntimeError("remote job died before finishing (log tail above)")
         time.sleep(POLL_SECS)
     else:
-        raise RuntimeError(f"remote job still running after ~{POLL_LIMIT * POLL_SECS // 60} min "
-                           f"— inspect {REMOTE_LOG} on the VM")
+        raise RuntimeError(f"remote job exceeded its deadline (~{poll_limit * POLL_SECS // 60} "
+                           f"min) — inspect {REMOTE_LOG} on the VM")
     _print_remote_log(runner)
 
 
@@ -232,9 +263,11 @@ def stop_vm(runner) -> None:
     _run(runner, ["gcloud", "compute", "instances", "stop", VM, "--zone", ZONE])
 
 
-def remote_run(source: str, *, out=None, profile: str | None = None,
-               keep_up: bool = False, runner=subprocess.run) -> int:
+def remote_run(source: str | None, *, out=None, profile: str | None = None,
+               keep_up: bool = False, runner=subprocess.run,
+               source_list=None, redo: bool = False) -> int:
     """Orchestrate preflight → ensure → start → bootstrap → sync → run → fetch → (finally) stop.
+    ``source_list`` (RUNEASY) runs the batch loop ON the VM instead of a single ``source``.
     Returns the rc; the VM is auto-stopped even if a step raises (unless keep_up). Preflight runs
     only on the real subprocess runner (skipped when a fake runner is injected for tests)."""
     if runner is subprocess.run:
@@ -245,8 +278,15 @@ def remote_run(source: str, *, out=None, profile: str | None = None,
         wait_for_ssh(runner)
         bootstrap_vm(runner)
         sync_code(runner)
-        print(f"[remote] running {source} on {VM}…", flush=True)
-        run_remote_job(runner, source, profile)
+        if source_list is not None:
+            from src.adhoc import _parse_links
+            n = len(_parse_links(Path(source_list).read_text()))
+            print(f"[remote] running {n} links from {source_list} on {VM}…", flush=True)
+            run_remote_batch(runner, Path(source_list), profile=profile or "lecture",
+                             redo=redo, n_links=n)
+        else:
+            print(f"[remote] running {source} on {VM}…", flush=True)
+            run_remote_job(runner, source, profile)
         if out is not None:
             fetch_report(runner, out)
             print(f"[remote] bundle → {Path(out).expanduser()}", flush=True)

@@ -19,7 +19,7 @@ WORK_ROOT = Path("work")
 # references.md is the M3 enrich output (present only when enrichment ran; missing = tolerated).
 # coverage_report.md is EVAL's scorecard (present when the scorer ran; missing = tolerated).
 REPORT_FILES = ["notes.md", "slides.pdf", "slide_captions.md", "equations.md", "references.md",
-                "coverage_report.md"]
+                "coverage_report.md", "coverage_report.json"]
 
 
 def assemble_report(event_id: str, work_root: Path = WORK_ROOT,

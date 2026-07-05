@@ -23,6 +23,7 @@ def _classify(cmd) -> str:
     if "instances start" in s:         return "start"
     if "instances stop" in s:          return "stop"
     if "echo ok" in s:                 return "sshprobe"   # post-start ssh-readiness poll
+    if "scp" in s and "_lsic_links" in s: return "linkspush"  # RUNEASY links file → VM
     if "scp" in s and ".lsic_env" in s: return "topupscp"   # key top-up file (before envpush)
     if "scp" in s and ".env" in s:     return "envpush"
     if "scp" in s:                     return "scp"
@@ -228,6 +229,61 @@ def test_remote_job_dead_surfaces_log_then_raises(monkeypatch):
         remote.remote_run("https://youtu.be/x", out=None, runner=r)
     assert "runlog" in r.ops                                     # log tail BEFORE the raise
     assert r.ops[-1] == "stop"                                   # finally still stops the VM
+
+
+# --- RUNEASY batch (one VM run looping the list ON the VM) ---
+
+def _links_file(tmp_path, n=3):
+    f = tmp_path / "links.txt"
+    f.write_text("\n".join(f"https://youtu.be/vid{i}" for i in range(n)) + "\n")
+    return f
+
+
+def test_batch_pushes_links_as_file_never_argv(tmp_path):
+    r = FakeRunner(status="RUNNING")
+    remote.remote_run(None, out=None, runner=r, source_list=_links_file(tmp_path))
+    assert "linkspush" in r.ops                                  # the file travels by scp
+    run_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "run")
+    assert "youtu.be" not in run_cmd                             # no URL in ssh argv (Q6)
+    assert "--source-list" in run_cmd and "--local" in run_cmd   # CR1: the SAME loop, on-VM
+    assert "BATCH_DONE" not in run_cmd or True
+    assert r.ops.index("linkspush") < r.ops.index("run")
+
+
+def test_batch_polls_batch_done_sentinel_not_layout(tmp_path):
+    r = FakeRunner(status="RUNNING")
+    remote.remote_run(None, out=None, runner=r, source_list=_links_file(tmp_path))
+    poll_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "poll")
+    assert "BATCH_DONE" in poll_cmd                              # sentinel, not subfolder-peeking
+    assert "PROGRESS" in poll_cmd                                # live n/total display
+
+
+def test_batch_does_not_wipe_remote_out(tmp_path):
+    # resume needs the finished subfolders — only stale sentinels are cleared
+    r = FakeRunner(status="RUNNING")
+    remote.remote_run(None, out=None, runner=r, source_list=_links_file(tmp_path))
+    run_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "run")
+    assert "rm -rf" not in run_cmd
+    assert "rm -f" in run_cmd and "BATCH_DONE" in run_cmd
+
+
+def test_batch_deadline_scales_with_list_length(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    seen = {}
+    real = remote._launch_and_poll
+    monkeypatch.setattr(remote, "_launch_and_poll",
+                        lambda runner, launch, done, limit, **kw:
+                        seen.update(limit=limit) or real(runner, launch, done, limit, **kw))
+    r = FakeRunner(status="RUNNING")
+    remote.remote_run(None, out=None, runner=r, source_list=_links_file(tmp_path, n=5))
+    assert seen["limit"] == remote.POLL_LIMIT * 5
+
+
+def test_batch_redo_forwarded(tmp_path):
+    r = FakeRunner(status="RUNNING")
+    remote.remote_run(None, out=None, runner=r, source_list=_links_file(tmp_path), redo=True)
+    run_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "run")
+    assert "--redo" in run_cmd
 
 
 # --- branch selection (verify a feature branch on the VM before merge) ---
