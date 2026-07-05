@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Optional
@@ -140,12 +141,35 @@ def _resolve_video(asset: Asset, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = asset.source_url
     if "youtu.be" in url or "youtube.com" in url:
-        _fetch_youtube(url, dest)
+        _fetch_with_retry(_fetch_youtube, url, dest)
     else:
-        _fetch_http(url, dest)
+        _fetch_with_retry(_fetch_http, url, dest)
     if not dest.exists():
         raise RuntimeError(f"fetch produced no file for {url}")
     return dest
+
+
+_FETCH_ATTEMPTS = 3
+
+
+def _fetch_with_retry(fetch, url: str, dest: Path) -> None:
+    """Whole-command retry for the network fetchers (FIX): yt-dlp/curl already retry
+    fragments internally, so a surviving non-zero exit is a throttle/outage burst (the
+    observed yt-dlp 503 that killed a batch event) — worth a bounded outer retry. NOT
+    ``util.retry_transient``: that classifies by message markers, which a
+    ``CalledProcessError`` never carries — here the exit code itself is the signal.
+    Degrade-to-today: first-try success is byte-identical to a bare call (zero sleeps).
+    A truly-dead URL fails ``_FETCH_ATTEMPTS`` times and raises as before."""
+    for attempt in range(_FETCH_ATTEMPTS):
+        try:
+            return fetch(url, dest)
+        except subprocess.CalledProcessError as e:
+            if attempt == _FETCH_ATTEMPTS - 1:
+                raise
+            delay = 15 * (attempt + 1)
+            print(f"  [ingest] fetch exit {e.returncode} — retry "
+                  f"{attempt + 1}/{_FETCH_ATTEMPTS - 1} in {delay}s ({url})", flush=True)
+            time.sleep(delay)
 
 
 def _fetch_youtube(url: str, dest: Path) -> None:

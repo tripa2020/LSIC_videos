@@ -37,7 +37,10 @@ SSH_USER = os.environ.get("LSIC_SSH_USER", "user")
 REPO_URL = os.environ.get("LSIC_REPO_URL", "https://github.com/tripa2020/LSIC_videos.git")
 REMOTE_REPO = f"/home/{SSH_USER}/LSIC_videos"
 REMOTE_OUT = f"/home/{SSH_USER}/_lsic_out"
+REMOTE_LOG = f"/home/{SSH_USER}/_lsic_run.log"
 REMOTE_TMP_ENV = "/tmp/.lsic_env"
+POLL_SECS = 60      # between job-status polls (each poll is its own short-lived ssh)
+POLL_LIMIT = 90     # give a job ≤ 90 polls (~90 min) before declaring it hung
 LOCAL_ENV = Path(__file__).resolve().parent.parent / ".env"
 
 # Keys topped-up onto an already-provisioned VM's .env (append-only; one mechanism for all —
@@ -173,11 +176,42 @@ def run_remote_job(runner, source: str, profile: str | None = None) -> None:
         stage_dir = f"work/events/{eid}/{util.STAGE_BRIEFING}"
         prep = f"rm -rf {stage_dir} && "
         print(f"[remote] redo: clearing {stage_dir} so synth re-runs…", flush=True)
+    # Detached launch + poll (FIX, 2026-07-04): gcloud's IAP ssh drops on long silent
+    # stretches (a Fable cognition pass thinks for minutes with no output) — a blocking ssh
+    # killed the first v4.1 run mid-job and its stdout (incl. the cost lines) died with the
+    # channel. nohup + a VM-side log + short-lived poll sshes make the job immune to any one
+    # dropped connection; the log tail is surfaced locally either way.
     _ssh(runner,
          f"cd {REMOTE_REPO} && {prep}rm -rf {REMOTE_OUT} && "
-         f"PY=./.venv/bin/python ./.venv/bin/python -m src.main "
-         f"--source '{source}'{prof} --out {REMOTE_OUT}",
-         timeout=None)
+         f"nohup env PY=./.venv/bin/python ./.venv/bin/python -m src.main "
+         f"--source '{source}'{prof} --out {REMOTE_OUT} "
+         f"> {REMOTE_LOG} 2>&1 < /dev/null & echo LAUNCHED")
+    for _ in range(POLL_LIMIT):
+        cp = _ssh(runner,
+                  f"test -f {REMOTE_OUT}/notes.md && echo POLL_DONE || "
+                  f"(pgrep -f '[s]rc.main' >/dev/null && echo POLL_RUNNING || echo POLL_DEAD)")
+        state = cp.stdout or ""
+        if "POLL_DONE" in state:
+            break
+        if "POLL_DEAD" in state:
+            _print_remote_log(runner)
+            raise RuntimeError("remote job died before producing the bundle (log tail above)")
+        time.sleep(POLL_SECS)
+    else:
+        raise RuntimeError(f"remote job still running after ~{POLL_LIMIT * POLL_SECS // 60} min "
+                           f"— inspect {REMOTE_LOG} on the VM")
+    _print_remote_log(runner)
+
+
+def _print_remote_log(runner) -> None:
+    """Surface the VM-side run log locally (cost lines + tail) — best-effort, never fatal."""
+    try:
+        cp = _ssh(runner, f"grep -E '\\[anthropic\\]|\\[cognition\\]' {REMOTE_LOG} | tail -12; "
+                          f"echo ---; tail -n 6 {REMOTE_LOG}")
+        for line in (cp.stdout or "").splitlines():
+            print(f"  [vm] {line}", flush=True)
+    except Exception:
+        pass
 
 
 def fetch_report(runner, out) -> None:

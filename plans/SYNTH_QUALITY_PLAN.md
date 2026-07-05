@@ -93,8 +93,8 @@ Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; 
 | ~~OQ3~~ | ✅ RESOLVED 2026-06-26 — no duration threshold; auto map-reduce iff size-windowing yields **≥2 windows** (evidence text > `WINDOW_BUDGET`). | — | done |
 | OQ4  | Cross-chapter-ratio threshold for the CI coherence guardrail                      | data      | EVAL (from BASE baseline) |
 | OQ5  | 122-run $ ceiling (CLOUD_BATCH OQ3 default ~$75–100 batch-priced)                 | Commander | BATCH      |
-| OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs?          | Commander | RUNEASY    |
-| OQ7  | RUNEASY: emit a single results index (table of all bundles) or per-video folders?  | Commander | RUNEASY    |
+| OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs? Decision metrics presented 2026-07-04 (VM overhead/video · tunnel-flake surface · isolation vs idempotent-stage resume · single-VM parallelism ceiling · ops complexity); recommendation: **one VM run looping the list** | Commander | RUNEASY    |
+| ~~OQ7~~ | ✅ RESOLVED 2026-07-04 (Alex) — one output folder per batch; **each video gets its own subfolder** (`<out>/<video_id>/` with notes.md, coverage_report.md, …) | — | done |
 | OQ8  | MAPRED: `WINDOW_BUDGET` default (per-window char/token budget) — tune via A/B vs golden | data      | MAPRED     |
 | ~~OQ9~~ | ✅ RESOLVED 2026-07-03 (revised) — **no ceiling in v1**; observe then set. **Observed 2026-07-04:** clean run ≈ $3.03/talk; worst case $9.83 via truncation retry storm (now failfast-guarded). Suggested ceiling when enforcement lands: ~$5/talk | Commander | done (data in) |
 | OQ10 | Are ALL 5 per-move fields hard-required for a move to count (quote·tag·work·fails_when·self_question)? Defaulted to all-required — veto if too rigid | Commander | DEPTH v3   |
@@ -332,16 +332,22 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
 
 ### PART 2 — Ship at scale (CLOUD_BATCH tail; independent of PART 1)
 
-- [~] **FIX — corpus driver + ingest retry** (PARTIAL as of 2026-06-26) — (a) `run_corpus.sh`:
-  make `run_one` trap failures, log `❌ <event>`, and `exit 0` so `xargs -P` never sees a 255 and
-  never aborts the batch; tally failures at the end. (b) `ingest.py`: wrap
-  `_fetch_youtube`/`_fetch_http` in `util.retry_transient` (exists, [src/util.py:174]).
-  **Status:** the ✅/❌ trap is ALREADY in `run_one` ([run_corpus.sh:69-75]) → the no-drop half
-  looks done in code (needs a real run to confirm); the end-of-run tally still greps `"report OK"`
-  ([run_corpus.sh:86]) instead of counting ✅/❌. Remaining: **ingest retry NOT done**;
-  `test_corpus_driver.py` **not written**.
-  *Gate:* `/python-unit-tests` — `test_corpus_driver`: a failing event does NOT drop the rest;
-  ingest retries a transient non-zero exit then succeeds.
+- [x] **FIX — corpus driver + ingest retry + remote hardening** (DONE 2026-07-04) —
+  (a) `run_corpus.sh`: `run_one` `return 0` always (one bad event can never abort the
+  `xargs -P` batch); ✅/❌ recorded to `logs/_{ok,fail}.txt`; the summary **counts the
+  driver's own records** (the old tally log-grepped `"report OK"` and — pre-existing bug —
+  the trailing GCS guard made every non-GCS run exit 1; now explicit `exit 0`).
+  (b) `ingest.py._fetch_with_retry`: bounded whole-command retry on a non-zero yt-dlp/curl
+  exit (NOT `util.retry_transient` — its message-marker classifier can't see a
+  `CalledProcessError`; the exit code itself is the signal). First-try success = zero sleeps.
+  (c) `remote.run_remote_job` (from Known Failures): **detached nohup launch + VM-side log
+  (`_lsic_run.log`) + short-lived poll sshes** — the blocking IAP ssh that died mid-v4.1-run
+  and took the cost lines with it can no longer kill a job; DONE/RUNNING/DEAD polls, log tail
+  surfaced locally either way.
+  *Gate:* 184 tests + `--selftest` green — `test_corpus_driver` runs the REAL bash driver with
+  a stub `$PY` (poisoned event doesn't drop the rest; tally counted not grepped; all-green
+  clean); ingest retry (transient-then-success · zero-cost success · dead-URL raises);
+  remote (detached launch · poll-until-done · dead-job surfaces log then raises, VM still stopped).
 
 - [ ] **RUNEASY — one-command multi-video front door** (NEW 2026-06-26; depends on FIX) — make
   running "a bunch of videos" a single short command. **Scoping (answered 2026-06-26):**
@@ -434,8 +440,8 @@ _Inherited from CLOUD_BATCH / EASYRUN; resolved within this plan's FIX milestone
 
 | Symptom                                              | Root cause                                                                                  | Fix (this plan)                                                    | Status |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------ |
-| `run_corpus.sh` silently dropped 1 of 5 events       | `run_one` lets a non-zero exit propagate; `xargs -P` aborts the whole batch on a 255 exit   | FIX: trap in `run_one`, log ❌, `exit 0`, tally at end             | OPEN   |
-| Ingest died on a transient yt-dlp 503/throttle       | `_fetch_youtube`/`_fetch_http` have no whole-command retry ([src/ingest.py:151-176])        | FIX: wrap both in `util.retry_transient` ([src/util.py:174])      | OPEN   |
+| `run_corpus.sh` silently dropped 1 of 5 events       | `run_one` lets a non-zero exit propagate; `xargs -P` aborts the whole batch on a 255 exit   | FIX: `return 0` trap in `run_one`, ✅/❌ tally files, explicit driver `exit 0` | FIXED (2026-07-04, test_corpus_driver) |
+| Ingest died on a transient yt-dlp 503/throttle       | `_fetch_youtube`/`_fetch_http` have no whole-command retry ([src/ingest.py:151-176])        | FIX: `_fetch_with_retry` — bounded outer retry keyed on the exit code | FIXED (2026-07-04) |
 | Long-video synthesis truncated / "lost in the middle" | thematic call caps context at 140k chars ([src/synthesize.py:553])                          | MAPRED: chapter map-reduce removes the single-call ceiling         | OPEN   |
 | `validate_notes`/`validate_slides` false-fail on a `lecture` bundle | both encode the 15-section LSIC **briefing** template only | EVAL (profile-agnostic, reads structured JSON) is the lecture scorer; a profile-aware validator is a later option | KNOWN  |
 | `references.md` off-target on metaphorical claims    | `derive_queries` keyword-matched "building animals/ghosts" → smart-buildings energy papers   | EASYRUN M3.1 residual; LLM query-gen is the upgrade (out of scope here) | KNOWN  |
@@ -444,7 +450,7 @@ _Inherited from CLOUD_BATCH / EASYRUN; resolved within this plan's FIX milestone
 | Educator perspective appears by luck (1 of 5 golden bundles) | lens selection is model-free-choice ("choose 3-5 perspectives that genuinely fit")     | DEPTH v3: dedicated How-to-Learn-It section owned by the CONVERT pass (always rendered)       | FIXED (v4.1 verified 2026-07-04) |
 | Cognitive Moves thin (≤7 moves × 1 sentence)         | the prompt itself caps output: "4-7 entries", "one substantive sentence per item, no padding"; 8-tag set; no exemplars | DEPTH v3: ≥10 moves × 2-3 sentences, 15-tag + ACTA probes, few-shot exemplars                 | FIXED (v4: 17 moves; v4.1: 13) |
 | Notes reference talk vernacular never introduced ('nines', 'three jokes') | extraction compressed to insider shorthand — written for someone who watched the talk | SELF-CONTAINED RULE in both prompts (`8420c63`): one-clause setup at first use; terms carry definitions | FIXED (v4.1 verified 2026-07-04) |
-| `--remote` job died with ssh 255 mid-run              | gcloud IAP ssh drops on long silent stretches (a Fable pass thinks for minutes with no output); remote stdout — incl. the cost lines — dies with the channel | FIX: `run_remote_job` → nohup + VM-side log + poll (pattern proven manually 2026-07-04)       | OPEN   |
+| `--remote` job died with ssh 255 mid-run              | gcloud IAP ssh drops on long silent stretches (a Fable pass thinks for minutes with no output); remote stdout — incl. the cost lines — dies with the channel | FIX: `run_remote_job` → detached nohup + `_lsic_run.log` + DONE/RUNNING/DEAD polls; log tail surfaced locally | FIXED (2026-07-04) |
 | First v4.1 extract burned 4× $1.70 on identical retries | 16k output cap truncated mid-JSON; `call_json` retried identical params at full price | `call_json` fails fast on max_tokens truncation (2026-07-04); raising the cap via streaming is a FIX option | FIXED  |
 
 ### Out of scope (deferred / parallel tracks)

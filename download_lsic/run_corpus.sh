@@ -54,6 +54,7 @@ EVTS=$("$PY" -c "import json; print('\n'.join(e['event_id'] for e in json.load(o
 
 # --- 4. run the pipeline per event (isolated → safe to parallelize) ---
 mkdir -p logs
+rm -f logs/_ok.txt logs/_fail.txt        # fresh tally per run (appended by run_one)
 run_one() {
   local evt="$1" rc
   echo "===== $evt =====" >&2
@@ -67,12 +68,15 @@ run_one() {
     rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
-    echo "✅ $evt"
-    [ -n "$GCS_BUCKET" ] && gsutil -m rsync -r "work/events/${evt}/Report" \
-        "${GCS_BUCKET}/${evt}/Report" >/dev/null 2>&1
+    echo "✅ $evt"; echo "$evt" >> logs/_ok.txt
+    if [ -n "$GCS_BUCKET" ]; then
+      gsutil -m rsync -r "work/events/${evt}/Report" \
+          "${GCS_BUCKET}/${evt}/Report" >/dev/null 2>&1 || echo "⚠️ $evt gcs sync failed"
+    fi
   else
-    echo "❌ $evt  (tail: $(tail -1 "logs/${evt}.log"))"
+    echo "❌ $evt  (tail: $(tail -1 "logs/${evt}.log"))"; echo "$evt" >> logs/_fail.txt
   fi
+  return 0    # NEVER propagate rc — one bad event must not abort the xargs -P batch (FIX)
 }
 export -f run_one; export PY CAP_HOURS EXTRA GCS_BUCKET
 
@@ -82,7 +86,15 @@ else
   while IFS= read -r evt; do [ -n "$evt" ] && run_one "$evt"; done <<< "$EVTS"
 fi
 
-# --- 5. summary ---
-done_n=$(grep -lc "report OK\|report ·" logs/*.log 2>/dev/null | wc -l | tr -d ' ')
-echo "[run_corpus] done — Report bundles in work/events/<id>/Report/"
+# --- 5. summary (counted from the driver's own ✅/❌ records — not log grep) ---
+ok_n=$([ -f logs/_ok.txt ] && wc -l < logs/_ok.txt || echo 0); ok_n=$(echo "$ok_n" | tr -d ' ')
+fail_n=$([ -f logs/_fail.txt ] && wc -l < logs/_fail.txt || echo 0); fail_n=$(echo "$fail_n" | tr -d ' ')
+echo "[run_corpus] done — ✅ ${ok_n} ok · ❌ ${fail_n} failed — Report bundles in work/events/<id>/Report/"
+if [ "$fail_n" -gt 0 ]; then
+  echo "[run_corpus] failed events:"; sed 's/^/  ❌ /' logs/_fail.txt
+fi
 [ -n "$GCS_BUCKET" ] && echo "[run_corpus] synced to ${GCS_BUCKET}/<id>/Report/"
+# Explicit success: the tally above is the failure report; per-event failures must not turn
+# into a nonzero driver exit (pre-FIX, the GCS guard line above silently made every
+# non-GCS run exit 1). Batch gates count bundles, not this exit code.
+exit 0

@@ -32,7 +32,9 @@ def _classify(cmd) -> str:
     if ">>" in s and ".env" in s:      return "keyappend"   # grep "^KEY=" tmp >> .env (chained)
     if "git clone" in s or "vm_setup.sh" in s: return "bootstrap"
     if "git fetch" in s:               return "sync"
-    if "--source" in s:                return "run"
+    if "--source" in s:                return "run"       # the detached nohup launch
+    if "pgrep" in s:                   return "poll"      # job-status probe (short-lived ssh)
+    if "_lsic_run.log" in s:           return "runlog"    # surface the VM-side log tail
     return "other"
 
 
@@ -40,12 +42,13 @@ class FakeRunner:
     """Records each gcloud call as a classified op; returns canned describe status + env state.
     ``missing_keys`` = TOPUP_KEYS the fake VM's .env lacks (default: it has them all)."""
     def __init__(self, status="RUNNING", fail_on=None, have_env=True, missing_keys=(),
-                 probe_fail=0):
+                 probe_fail=0, poll_states=None):
         self.status = status
         self.fail_on = fail_on
         self.have_env = have_env
         self.missing_keys = set(missing_keys)
         self.probe_fail = probe_fail
+        self.poll_states = list(poll_states or ["POLL_DONE"])   # job done on first poll
         self._probes = 0
         self.ops: list[str] = []
         self.cmds: list[str] = []
@@ -66,6 +69,8 @@ class FakeRunner:
         elif op.startswith("keycheck:"):
             key = op.split(":", 1)[1]
             out = f"NO_{key}" if key in self.missing_keys else f"HAVE_{key}"
+        elif op == "poll":
+            out = self.poll_states.pop(0) if self.poll_states else "POLL_DONE"
         else:
             out = ""
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
@@ -194,6 +199,35 @@ def test_reader_context_keys_are_topped_up():
     assert "READER_DOMAIN" in remote.TOPUP_KEYS
     assert "CURRENT_WORK" in remote.TOPUP_KEYS
     assert "ANTHROPIC_API_KEY" in remote.TOPUP_KEYS
+
+
+# --- detached launch + poll (tunnel-drop hardening, FIX) ---
+
+def test_remote_job_launch_is_detached_with_vm_log():
+    r = FakeRunner(status="RUNNING")
+    remote.remote_run("https://youtu.be/x", out=None, runner=r)
+    run_cmd = next(c for c, op in zip(r.cmds, r.ops) if op == "run")
+    assert "nohup" in run_cmd and "_lsic_run.log" in run_cmd     # survives a dropped tunnel
+    assert "& echo LAUNCHED" in run_cmd                          # ssh returns immediately
+    assert "runlog" in r.ops                                     # cost lines surfaced locally
+
+
+def test_remote_job_polls_until_done(monkeypatch):
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="RUNNING",
+                   poll_states=["POLL_RUNNING", "POLL_RUNNING", "POLL_DONE"])
+    remote.remote_run("https://youtu.be/x", out=None, runner=r)
+    assert r.ops.count("poll") == 3
+    assert r.ops.index("run") < r.ops.index("poll") < r.ops.index("stop")
+
+
+def test_remote_job_dead_surfaces_log_then_raises(monkeypatch):
+    monkeypatch.setattr(remote.time, "sleep", lambda *_: None)
+    r = FakeRunner(status="RUNNING", poll_states=["POLL_RUNNING", "POLL_DEAD"])
+    with pytest.raises(RuntimeError, match="died"):
+        remote.remote_run("https://youtu.be/x", out=None, runner=r)
+    assert "runlog" in r.ops                                     # log tail BEFORE the raise
+    assert r.ops[-1] == "stop"                                   # finally still stops the VM
 
 
 # --- branch selection (verify a feature branch on the VM before merge) ---
