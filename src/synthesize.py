@@ -392,7 +392,22 @@ def synthesize_full(event_id: str, work_root: Path = Path("work"),
     out_path = workdir / util.STAGE_BRIEFING / "notes.md"
     util.write_with_manifest(out_path, notes_md, stage="synthesize")
     print(f"[synthesize] {event_id} → {out_path}", flush=True)
+
+    # 7. EVAL (read-only; degrade-to-today): score the bundle, never block the pipeline
+    _run_eval(workdir / util.STAGE_BRIEFING, event_id)
     return out_path
+
+
+def _run_eval(briefing_dir: Path, event_id: str) -> None:
+    """Fire the pure scorer over the freshly-written bundle. Any failure prints and is
+    swallowed — EVAL is an observer, never a gate on the pipeline itself."""
+    try:
+        from src import synth_eval
+        rep = synth_eval.evaluate_briefing(briefing_dir)
+        if rep is not None:
+            print(f"  [eval] {event_id} → {rep.name}", flush=True)
+    except Exception as e:
+        print(f"  [eval] {event_id} skipped ({type(e).__name__}: {e})", flush=True)
 
 
 # --- helpers ---

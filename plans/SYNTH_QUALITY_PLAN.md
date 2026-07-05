@@ -176,11 +176,18 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
 
 ### PART 1 — Synthesis quality
 
-- [ ] **EVAL — `src/synth_eval.py`** (was M-S0; built FIRST; R2/R3) — pure, no-LLM, reads the
-  structured reduce JSON + evidence: cite-spread · cross-chapter ratio · chapter-coverage ·
-  groundedness · chapter-index-leak regex. Profile-agnostic (scores LSIC unchanged). Run it on
-  the BASE output to record a baseline + set OQ4.
-  *Gate:* `/python-unit-tests` — metrics deterministic on fixtures (cites spanning 1 vs ≥2 chapters); baseline JSON emitted.
+- [x] **EVAL — `src/synth_eval.py`** (BUILT 2026-07-04; R2/R3) — pure, no-LLM, deterministic.
+  Two modes: `score_notes` (notes.md alone — scores every golden, old or new) and `score_full`
+  (+ `thematic.json`/`evidence.json`: verbatim quote verification, evidence resolution,
+  **cross-window ratio** = OQ4's metric). Encodes the v3 gates (moves ≥10 · ≥2 final-third ·
+  Founder Lens 3-5 · Learn-It ≥5 Qs + artifact · status clean). Hooks: `synthesize._run_eval`
+  (read-only, failure-swallowed) writes `coverage_report.{md,json}` per run; `report.py` ships
+  it; CLI `python -m src.synth_eval <bundles…>` for retro-scoring.
+  **Retro-scores: `golden/EVAL_SCORES.md`** — v4_depth3 is the only 5/5-gate generation; the
+  DEPTH v3 lift is now measured, and the table is the regression floor for all future changes.
+  *Gate:* 175 tests + `--selftest` green (metrics deterministic on fixtures incl. 1-vs-≥2-window
+  cites, normalized quote match, read-only + never-blocks contracts). **OQ4 residual:** the
+  cross-window threshold gets its number after a few in-pipeline `score_full` runs accumulate.
 
 - [~] **DEPTH v1 — Cognition Layer (SHIPPED on `alex/cognition-layer`)** — the lecture profile now
   extracts HOW the speaker thinks: `operating_algorithm`, `cognitive_moves` (tagged by operation),

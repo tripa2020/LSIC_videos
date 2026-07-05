@@ -25,7 +25,7 @@ Anything smaller than a major effort just updates the master [PLAN.md](PLAN.md) 
 
 | Effort            | Doc                                            | State (one line — update when it changes)                                                                                     |
 |-------------------|------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| Synthesis quality | [SYNTH_QUALITY_PLAN.md](SYNTH_QUALITY_PLAN.md) | BASE + DEPTH v1/v2 + MAPRED + **DEPTH v3 all shipped & verified** (v3 closed 2026-07-04: two-pass cognitive core on Fable 5, frozen `golden/lXUZvyajciY_v4_depth3/`, ~$3/talk); **EVAL is next**, then FIX → RUNEASY (Alex's "easy to run" phase) → BATCH (122-run) |
+| Synthesis quality | [SYNTH_QUALITY_PLAN.md](SYNTH_QUALITY_PLAN.md) | BASE + DEPTH v1/v2 + MAPRED + **DEPTH v3 all shipped & verified** (v3 closed 2026-07-04: two-pass cognitive core on Fable 5, frozen `golden/lXUZvyajciY_v4_depth3/`, ~$3/talk); **EVAL built 2026-07-04** (`src/synth_eval.py` + `golden/EVAL_SCORES.md` — v4 is the only 5/5-gate bundle, on branch `alex/eval`); next FIX → RUNEASY (Alex's "easy to run" phase) → BATCH (122-run) |
 
 ## Archived (2026-07-02)
 
