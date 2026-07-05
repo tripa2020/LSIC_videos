@@ -123,8 +123,14 @@ def call_json(system: str, user: str, *, model: str = DEFAULT_MODEL,
             raise RuntimeError("Anthropic hit max_tokens before producing text; raise max_tokens")
         try:
             return _extract_json(text)
-        except (ValueError, json.JSONDecodeError) as e:   # malformed/empty → one more attempt
-            last = e
+        except (ValueError, json.JSONDecodeError) as e:
+            if stop == "max_tokens":
+                # Truncated mid-JSON: deterministic — retrying identical params re-buys the same
+                # truncation at full price (observed 4×$1.70 on the v4.1 run). Fail fast; the
+                # caller (cognition._pass) owns the retry/fallback policy.
+                raise RuntimeError(f"output truncated at max_tokens={max_tokens} "
+                                   f"(unparseable JSON) — raise max_tokens") from e
+            last = e                                      # malformed/empty → one more attempt
             if attempt < attempts - 1:
                 sleep(5 * (attempt + 1))
                 continue

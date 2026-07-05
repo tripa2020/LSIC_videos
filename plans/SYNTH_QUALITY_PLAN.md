@@ -96,7 +96,7 @@ Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; 
 | OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs?          | Commander | RUNEASY    |
 | OQ7  | RUNEASY: emit a single results index (table of all bundles) or per-video folders?  | Commander | RUNEASY    |
 | OQ8  | MAPRED: `WINDOW_BUDGET` default (per-window char/token budget) — tune via A/B vs golden | data      | MAPRED     |
-| ~~OQ9~~ | ✅ RESOLVED 2026-07-03 (revised) — **no ceiling in v1**. Run the completed system, observe actual per-pass usage→$ (printed every run), THEN set `COGNITION_COST_CEILING`; enforcement code ships later with a real number | Commander | post-A/B   |
+| ~~OQ9~~ | ✅ RESOLVED 2026-07-03 (revised) — **no ceiling in v1**; observe then set. **Observed 2026-07-04:** clean run ≈ $3.03/talk; worst case $9.83 via truncation retry storm (now failfast-guarded). Suggested ceiling when enforcement lands: ~$5/talk | Commander | done (data in) |
 | OQ10 | Are ALL 5 per-move fields hard-required for a move to count (quote·tag·work·fails_when·self_question)? Defaulted to all-required — veto if too rigid | Commander | DEPTH v3   |
 | ~~OQ11~~ | ✅ RESOLVED 2026-07-03 — founder-persona wording **blessed as drafted** and written to the gitignored `.env`: READER_DOMAIN = robotics-entrepreneur/CEO lens; CURRENT_WORK = venture-wedge scouting + Tripp arm + LSIC pipeline | — | done |
 
@@ -217,8 +217,8 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   grounding; briefing byte-identical) **+** A/B the regenerated lecture vs DEPTH-v1 by eye against the
   gold (EVAL scores groundedness but not "idiosyncrasy" — that stays a human/critic check).
 
-- [ ] **DEPTH v3 — the cognitive core, taken to the real world** (NEW 2026-07-03; R6 two-pass;
-  **immediate build target**) — make the cognition layer founder-grade: full-context, two-pass,
+- [x] **DEPTH v3 — the cognitive core, taken to the real world** (VERIFIED + CLOSED 2026-07-04;
+  R6 two-pass) — make the cognition layer founder-grade: full-context, two-pass,
   three sections. Root causes it kills (diagnosed 2026-07-02 from the `v3_mapreduce` A/B): the
   140k context cap hid the last hour of the talk (no move cites past `[83:33]` of 146 min); the
   VM never saw `READER_DOMAIN` (Transfer Questions silently vanished); the prompt itself capped
@@ -267,6 +267,19 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   the 2026-07-03 research adoptions — ACTA knowledge-audit probes (Militello & Hutton),
   Matuschak retrieval-prompt rules, the wedge rubric (NFX / Every), and quote-first /
   according-to grounding.
+  - **✅ CLOSED OUT 2026-07-04 (successful).** Code `b02bae4` + `8420c63` on `alex/depth-v3`;
+    164 tests + `--selftest` green; briefing byte-identical. **A/B (Alex): PASS** — "exactly
+    the direction I want to go in"; one defect class found in grading (talk vernacular
+    referenced but never introduced — 'nines', the joke anecdote) → the **SELF-CONTAINED
+    RULE** added to both prompts; the v4.1 re-run passes every gate: 13 moves (≥10) spanning
+    `[00:14]`→`[110:42]` with 2 final-third cites, 13/13 quote + fails_when + self_question,
+    5 founder plays, 8 retrieval prompts, clean `cognition_status`, vernacular glossed at
+    first use. **Frozen:** `golden/lXUZvyajciY_v4_depth3/` (47.2KB notes.md).
+    **Observed cost (OQ9 data):** clean run ≈ **$3.03/talk** (extract $1.67 + convert $1.36;
+    ~90k input tokens each — full-transcript confirmed); the first v4.1 attempt cost ~$9.83
+    via a truncation retry storm (16k output cap → unparseable JSON → 4 identical full-price
+    internal retries) → `call_json` now **fails fast** on max_tokens truncation. Suggested
+    ceiling when enforcement lands: ~$5/talk.
 
 - [x] **MAPRED — profile-owned synthesis + lecture map-reduce** (VERIFIED 2026-06-27; R1/R5) — introduce
   `Profile.synthesize(ctx)`. **First** move `briefing.synthesize` = today's per-presentation +
@@ -419,10 +432,13 @@ _Inherited from CLOUD_BATCH / EASYRUN; resolved within this plan's FIX milestone
 | Long-video synthesis truncated / "lost in the middle" | thematic call caps context at 140k chars ([src/synthesize.py:553])                          | MAPRED: chapter map-reduce removes the single-call ceiling         | OPEN   |
 | `validate_notes`/`validate_slides` false-fail on a `lecture` bundle | both encode the 15-section LSIC **briefing** template only | EVAL (profile-agnostic, reads structured JSON) is the lecture scorer; a profile-aware validator is a later option | KNOWN  |
 | `references.md` off-target on metaphorical claims    | `derive_queries` keyword-matched "building animals/ghosts" → smart-buildings energy papers   | EASYRUN M3.1 residual; LLM query-gen is the upgrade (out of scope here) | KNOWN  |
-| v3 lecture bundle lost Transfer Questions entirely   | `--remote` VM never receives `READER_DOMAIN`/`CURRENT_WORK` (remote.py ships only API keys); the prompt orders an empty list on no-domain; render omits empty sections silently | DEPTH v3: bake into `.env` + remote top-up; generic-question degrade; visible `cognition_status` | OPEN   |
-| No cognitive move cites past `[83:33]` of a 146-min talk | cognition call is single-pass under the 140k-char cap ([synthesize.py:606], [:532]) — the model never SEES the last hour | DEPTH v3: uncap the cognition context (one full-context Fable call) + EVAL final-third guard | OPEN   |
-| Educator perspective appears by luck (1 of 5 golden bundles) | lens selection is model-free-choice ("choose 3-5 perspectives that genuinely fit")     | DEPTH v3: dedicated How-to-Learn-It section owned by the CONVERT pass (always rendered)       | OPEN   |
-| Cognitive Moves thin (≤7 moves × 1 sentence)         | the prompt itself caps output: "4-7 entries", "one substantive sentence per item, no padding"; 8-tag set; no exemplars | DEPTH v3: ≥10 moves × 2-3 sentences, 15-tag + ACTA probes, few-shot exemplars                 | OPEN   |
+| v3 lecture bundle lost Transfer Questions entirely   | `--remote` VM never receives `READER_DOMAIN`/`CURRENT_WORK` (remote.py ships only API keys); the prompt orders an empty list on no-domain; render omits empty sections silently | DEPTH v3: bake into `.env` + remote top-up; generic-question degrade; visible `cognition_status` | FIXED (v4.1 verified 2026-07-04) |
+| No cognitive move cites past `[83:33]` of a 146-min talk | cognition call is single-pass under the 140k-char cap ([synthesize.py:606], [:532]) — the model never SEES the last hour | DEPTH v3: uncap the cognition context (one full-context Fable call) + EVAL final-third guard | FIXED (v4 cites to [139:53]; v4.1 [110:42]) |
+| Educator perspective appears by luck (1 of 5 golden bundles) | lens selection is model-free-choice ("choose 3-5 perspectives that genuinely fit")     | DEPTH v3: dedicated How-to-Learn-It section owned by the CONVERT pass (always rendered)       | FIXED (v4.1 verified 2026-07-04) |
+| Cognitive Moves thin (≤7 moves × 1 sentence)         | the prompt itself caps output: "4-7 entries", "one substantive sentence per item, no padding"; 8-tag set; no exemplars | DEPTH v3: ≥10 moves × 2-3 sentences, 15-tag + ACTA probes, few-shot exemplars                 | FIXED (v4: 17 moves; v4.1: 13) |
+| Notes reference talk vernacular never introduced ('nines', 'three jokes') | extraction compressed to insider shorthand — written for someone who watched the talk | SELF-CONTAINED RULE in both prompts (`8420c63`): one-clause setup at first use; terms carry definitions | FIXED (v4.1 verified 2026-07-04) |
+| `--remote` job died with ssh 255 mid-run              | gcloud IAP ssh drops on long silent stretches (a Fable pass thinks for minutes with no output); remote stdout — incl. the cost lines — dies with the channel | FIX: `run_remote_job` → nohup + VM-side log + poll (pattern proven manually 2026-07-04)       | OPEN   |
+| First v4.1 extract burned 4× $1.70 on identical retries | 16k output cap truncated mid-JSON; `call_json` retried identical params at full price | `call_json` fails fast on max_tokens truncation (2026-07-04); raising the cap via streaming is a FIX option | FIXED  |
 
 ### Out of scope (deferred / parallel tracks)
 

@@ -124,6 +124,25 @@ def test_anthropic_caller_silent_on_missing_usage(capsys):
     assert "$" not in capsys.readouterr().out
 
 
+def test_anthropic_caller_fails_fast_on_truncated_json():
+    # max_tokens truncation is deterministic — one call, no full-price retry storm
+    calls = {"n": 0}
+    class Trunc:
+        @property
+        def messages(self):
+            class _M:
+                def create(self_inner, **kw):
+                    calls["n"] += 1
+                    return types.SimpleNamespace(
+                        stop_reason="max_tokens",
+                        content=[types.SimpleNamespace(type="text", text='{"a": "unterminat')],
+                        usage=None)
+            return _M()
+    with pytest.raises(RuntimeError, match="truncated at max_tokens"):
+        anthropic_caller.call_json("s", "u", client=Trunc(), attempts=4, sleep=lambda *_: None)
+    assert calls["n"] == 1
+
+
 def test_anthropic_caller_retries_then_raises():
     calls = {"n": 0}
     class Boom:
