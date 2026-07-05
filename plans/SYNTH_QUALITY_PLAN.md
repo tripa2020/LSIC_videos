@@ -63,6 +63,7 @@ Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; 
 | Moves contract (v3)    | **≥10 moves × 2-3 substantive sentences**; per move: verbatim quote · tag · work · fails_when · self_question; tag set = full 15-tag taxonomy **+ ACTA probes** (anomaly-noticing, workarounds/job-smarts, improvising, self-monitoring); quote-FIRST-then-analyze ordering; 2-3 few-shot exemplars | Alex: v3 moves "not robust/verbose enough" — the old prompt itself CAPPED output ("4-7 entries", "one substantive sentence, no padding", 8 tags, no exemplars). ACTA adds the practitioner-craft dimensions; verbatim quotes make EVAL's hallucination check deterministic | 2026-07-03 |
 | Reader-context parity  | `READER_DOMAIN` + `CURRENT_WORK` (founder-persona wording) baked into `.env` and topped-up to the VM `.env` by `remote.py` (same grep-append as the ANTHROPIC key); no-domain degrade → GENERIC self-questions, never an empty section | v3's Transfer Questions vanished because the VM never saw the env vars and the prompt ordered an empty list on no-domain — an env-parity bug class, killed at the root | 2026-07-03 |
 | Cognition failure semantics | Required fields (algorithm · moves≥10 · founder_lens · learn_it) get ONE plain re-issue retry (identical call, no repair prompt), then degrade with a **visible `cognition_status`** in the bundle + JSON. Cost = **ACTUAL API usage→$** (pricing table lives ONLY in `anthropic_caller`), printed per pass; **no ceiling in v1** — observe the completed system's real cost, then set `COGNITION_COST_CEILING` (OQ9 revised); a fixed input-size sanity guard covers the pathological case | Today ANY cognition failure silently drops the whole layer — that is exactly how the vanished section went unnoticed. Alex 2026-07-03: "see the cost after running the completed system before setting a ceiling"; a pre-call chars/4 estimator would duplicate drift-prone pricing knowledge (complexity review) | 2026-07-03 |
+| Complexity review (RUNEASY) | CR1 **one loop everywhere** (the VM batch = `--source-list --local` on the VM; resume-skip in the loop ONLY) · CR2 `BATCH_DONE`/`PROGRESS` sentinel files + shared `_launch_and_poll` (no duplicated poll machinery) · CR3 stateless poller, deadline scales with list length (no cross-poll stall state machine) · CR4 `_parse_links` function in adhoc.py, no links module | `/complexity_reviewer` 2026-07-05 — all four approved by Alex; removes both 🔴 modules (a second VM runner + a stateful poller) before any code exists | 2026-07-05 |
 | Complexity review (v3) | Reductions applied 2026-07-03 (all utility-neutral — default two-pass output unchanged): (1) no `COGNITION_SPLIT` knob (goldens = A/B baseline, no third prompt variant); (2) actual-usage cost accounting, ceiling between passes; (3) single downstream contract — `founder_lens`/`learn_it` are optional fields ON `CognitionOutput` v3; (4) `remote.py` top-up generalized to a key-list loop; (5) plain re-issue retry, no repair prompt | `/complexity_reviewer` on the v3 spec: the split knob's OFF path and the pre-call estimator were the two 🔴 modules (permanent prompt-maintenance surface; shallow drift-prone heuristic) | 2026-07-03 |
 
 ### System map
@@ -93,7 +94,7 @@ Status as of 2026-07-03: **in progress — BASE + DEPTH v1/v2 + MAPRED shipped; 
 | ~~OQ3~~ | ✅ RESOLVED 2026-06-26 — no duration threshold; auto map-reduce iff size-windowing yields **≥2 windows** (evidence text > `WINDOW_BUDGET`). | — | done |
 | OQ4  | Cross-chapter-ratio threshold for the CI coherence guardrail                      | data      | EVAL (from BASE baseline) |
 | OQ5  | 122-run $ ceiling (CLOUD_BATCH OQ3 default ~$75–100 batch-priced)                 | Commander | BATCH      |
-| OQ6  | RUNEASY: one `--remote` VM job per video, or one VM run looping all URLs? Decision metrics presented 2026-07-04 (VM overhead/video · tunnel-flake surface · isolation vs idempotent-stage resume · single-VM parallelism ceiling · ops complexity); recommendation: **one VM run looping the list** | Commander | RUNEASY    |
+| ~~OQ6~~ | ✅ RESOLVED 2026-07-05 (Alex) — **one VM run looping the list on the VM**. Decision metrics: VM overhead/video · tunnel-flake surface · isolation vs idempotent-stage resume · single-VM parallelism ceiling · ops complexity | — | done |
 | ~~OQ7~~ | ✅ RESOLVED 2026-07-04 (Alex) — one output folder per batch; **each video gets its own subfolder** (`<out>/<video_id>/` with notes.md, coverage_report.md, …) | — | done |
 | OQ8  | MAPRED: `WINDOW_BUDGET` default (per-window char/token budget) — tune via A/B vs golden | data      | MAPRED     |
 | ~~OQ9~~ | ✅ RESOLVED 2026-07-03 (revised) — **no ceiling in v1**; observe then set. **Observed 2026-07-04:** clean run ≈ $3.03/talk; worst case $9.83 via truncation retry storm (now failfast-guarded). Suggested ceiling when enforcement lands: ~$5/talk | Commander | done (data in) |
@@ -349,21 +350,44 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   clean); ingest retry (transient-then-success · zero-cost success · dead-URL raises);
   remote (detached launch · poll-until-done · dead-job surfaces log then raises, VM still stopped).
 
-- [ ] **RUNEASY — one-command multi-video front door** (NEW 2026-06-26; depends on FIX) — make
-  running "a bunch of videos" a single short command. **Scoping (answered 2026-06-26):**
-  - *Input:* a **list of URLs** (file, one per line) **and YouTube playlist/channel** URLs
-    (auto-expanded to member videos via `yt-dlp --flat-playlist`). Arbitrary URLs route through the
-    existing `--source` adhoc path — **NOT** the LSIC catalog machinery
-    (`group_manifest`/`fetch_docs`/`topic_filter`).
-  - *Run target:* **`--remote` by default** (offload heavy ASR/VLM to the GCP VM); a `--local` opt-out.
-  - *Kill these frictions:* (1) **no list→batch front door** — today you hand-loop `--source` per URL;
-    (2) **too many flags** — bake `--profile lecture --references --cap-video-hours 4` into the front door.
-  - *Shape:* extend `run_corpus.sh` (or a thin sibling) to accept a URL/playlist list, expand playlists,
-    loop `--source <url> --remote` with baked defaults, reuse FIX's no-drop + tally, collect `Report/`
-    bundles. Open: per-video VM job vs one VM looping all (OQ6); results index (OQ7).
-  - *Degrade-to-today:* catalog-id input still runs today's exact path; URL input is the new branch.
-  *Gate:* `/python-unit-tests` — playlist expansion + URL-vs-catalog routing on fakes (no network);
-  the existing catalog path stays byte-identical. **+** a real 2–3 URL `--remote` smoke run end-to-end.
+- [ ] **RUNEASY — one-command multi-video front door** (SCOPED 2026-07-05 via the 7-role Q&A;
+  depends on FIX ✓) — make running "a bunch of videos" one short command; **"just type run all"**.
+  - *Input (strict template):* `links.txt` — one URL per line, `#` comments, blank lines ignored;
+    parsed by a small `_parse_links` function in `adhoc.py` (CR4 — no shallow links module).
+    Repo-root default so the command needs zero args. URLs route through the existing `--source`
+    adhoc path — **NOT** the catalog machinery.
+  - *Command:* `python -m src.main --source-list [FILE=links.txt]` + a 2-line `./run_all` alias
+    (pure `exec` of the same path — an alias, not a second command path). `--local` opt-out
+    (default `--remote`); `--redo` forces re-run.
+  - *Loop shape (Q7 + CR1 — ONE loop everywhere):* **in-process Python loop** in the adhoc
+    path — per-URL no-drop (one bad video logs ❌ and the loop continues, FIX semantics),
+    ✅/❌ tally. The remote batch simply runs `--source-list links.txt --local` ON the VM —
+    no separate VM runner exists, and **resume-skip lives in the loop only** (wherever the
+    loop runs, resume works). `run_corpus.sh` stays catalog-only; no second bash driver.
+  - *Remote (OQ6 resolved 2026-07-05 — one VM run looping ON the VM):* the links file is
+    **pushed to the VM as a file, never interpolated into ssh argv** (Q6, quoting/injection
+    surface); detached launch + VM-side log via a **shared `_launch_and_poll`** (CR2 —
+    `run_remote_job`'s FIX machinery generalized, not copied). The loop writes a one-line
+    `PROGRESS` file (`3/10 <video_id>`) as it goes and a `BATCH_DONE` sentinel at the end, so
+    the poll stays the same **stateless** DONE/RUNNING/DEAD check with a different done-test
+    (CR3 — no log-advancement stall detector; the batch deadline scales with list length).
+    The poller prints `PROGRESS` changes live (Q4: running `n/10` + current video) and
+    per-video $ + the batch $ total from the VM log at the end.
+  - *Output (OQ7):* `<out>/<video_id>/` per video — notes.md · coverage_report.md ·
+    references.md · slides. Batch summary table: per video ✅/❌ + EVAL gate column
+    (**reported, not enforced** — Q2: gates were tuned on a 146-min talk) + $.
+  - *Resume (Q3):* re-running the same doc **skips videos whose output subfolder is already
+    complete** (notes.md present); upstream stages are cache-skipped anyway; duplicate URLs
+    dedupe to one cached event; `--redo` overrides.
+  - *Deferred but planned (Q5):* playlist/channel URLs auto-expanded via
+    `yt-dlp --flat-playlist` — v2; the links-file format is unchanged when it lands.
+  - *Degrade-to-today:* catalog-id and single `--source` inputs run today's exact paths;
+    the list input is the only new branch.
+  *Gate:* `/python-unit-tests` — links parsing (strict template) · skip-completed resume ·
+  no-drop loop · file-push (no argv interpolation) · sentinel/`PROGRESS` poll — all fakes, no network.
+  **+ VALIDATION CRITERION (Alex 2026-07-05):** a document with **10 video links**, one
+  command, PASS = all 10 output subfolders exist with `notes.md` + `coverage_report.md` +
+  clean `cognition_status`; any failure is loud in the tally.
 
 - [ ] **BATCH — the 122-event run** (was CLOUD_BATCH M-F2) — `run_corpus.sh filter` over the
   122 video-bearing events, 4h cap applied, `--dry-run` cost gate per event, stop on $ ceiling
