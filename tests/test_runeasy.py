@@ -36,6 +36,18 @@ def test_parse_links_empty_doc():
     assert adhoc._parse_links("# nothing here\n\n") == []
 
 
+def test_parse_links_tolerates_commas_on_one_line():
+    # observed in Alex's real list.txt: two URLs comma-separated on one line
+    text = "https://youtu.be/aaa\nhttps://youtu.be/bbb, https://youtu.be/ccc\n"
+    assert adhoc._parse_links(text) == [
+        "https://youtu.be/aaa", "https://youtu.be/bbb", "https://youtu.be/ccc"]
+
+
+def test_subject_slug():
+    assert adhoc._slug("How I Use LLMs! (2026)") == "How_I_Use_LLMs_2026"
+    assert adhoc._slug("") == ""
+
+
 # ---------- the loop ----------
 
 def _links(tmp_path, urls):
@@ -55,7 +67,7 @@ def test_loop_no_drop_and_tally(tmp_path, capsys):
         (Path(out) / "notes.md").write_text("n")
         return 0
     rc = adhoc.run_adhoc_list(_links(tmp_path, urls), out=tmp_path / "batch",
-                              run_one=fake_run)
+                              run_one=fake_run, meta_fetcher=lambda u: None)
     outp = capsys.readouterr().out
     assert rc == 0                                          # failures live in the tally
     assert len(calls) == 3                                  # no-drop: all three attempted
@@ -76,7 +88,7 @@ def test_loop_skip_completed_resume(tmp_path, capsys):
         Path(out).mkdir(parents=True, exist_ok=True)
         (Path(out) / "notes.md").write_text("n")
         return 0
-    adhoc.run_adhoc_list(_links(tmp_path, urls), out=tmp_path / "batch", run_one=fake_run)
+    adhoc.run_adhoc_list(_links(tmp_path, urls), out=tmp_path / "batch", run_one=fake_run, meta_fetcher=lambda u: None)
     assert calls == [urls[1]]                               # completed one skipped
     assert "SKIP" in capsys.readouterr().out
     assert (pre / "notes.md").read_text() == "already done"  # untouched
@@ -91,7 +103,7 @@ def test_loop_redo_overrides_skip(tmp_path):
     (pre / "notes.md").write_text("stale")
     calls = []
     adhoc.run_adhoc_list(_links(tmp_path, [url]), out=tmp_path / "batch", redo=True,
-                         run_one=lambda u, **kw: calls.append(u) or 0)
+                         run_one=lambda u, **kw: calls.append(u) or 0, meta_fetcher=lambda u: None)
     assert calls == [url]                                   # --redo re-runs it
 
 
@@ -107,15 +119,43 @@ def test_loop_writes_progress_and_gate_column(tmp_path, capsys):
         (Path(out) / "coverage_report.json").write_text(
             json.dumps({"gates": {"a": True, "b": True, "c": False}}))
         return 0
-    adhoc.run_adhoc_list(_links(tmp_path, [url]), out=tmp_path / "batch", run_one=fake_run)
+    adhoc.run_adhoc_list(_links(tmp_path, [url]), out=tmp_path / "batch", run_one=fake_run, meta_fetcher=lambda u: None)
     assert progress_seen["during"].startswith(f"1/1 {vid}")
     assert f"✅ {vid}  gates 2/3" in capsys.readouterr().out   # reported, not enforced
+
+
+def test_subject_becomes_folder_name(tmp_path):
+    url = "https://www.youtube.com/watch?v=vid00000000"
+    made = []
+    def fake_run(u, *, out, profile, work_root):
+        Path(out).mkdir(parents=True, exist_ok=True)
+        (Path(out) / "notes.md").write_text("n")
+        made.append(Path(out).name)
+        return 0
+    adhoc.run_adhoc_list(_links(tmp_path, [url]), out=tmp_path / "batch", run_one=fake_run,
+                         meta_fetcher=lambda u: {"title": "Digital Ghosts: a talk!"})
+    from datetime import date
+    vid = adhoc.mint_event_id(None, url, date.today())
+    assert made == [f"Digital_Ghosts_a_talk__{vid}"]        # subject IS the folder header
+
+
+def test_resume_matches_titled_folder(tmp_path, capsys):
+    url = "https://www.youtube.com/watch?v=vid00000000"
+    from datetime import date
+    vid = adhoc.mint_event_id(None, url, date.today())
+    pre = tmp_path / "batch" / f"Some_Subject__{vid}"       # completed on a prior run
+    pre.mkdir(parents=True)
+    (pre / "notes.md").write_text("done")
+    adhoc.run_adhoc_list(_links(tmp_path, [url]), out=tmp_path / "batch",
+                         run_one=lambda u, **kw: pytest.fail("must skip the completed video"),
+                         meta_fetcher=lambda u: {"title": "Some Subject"})
+    assert "SKIP" in capsys.readouterr().out
 
 
 def test_loop_empty_links_is_loud(tmp_path, capsys):
     f = tmp_path / "links.txt"
     f.write_text("# nothing\n")
-    assert adhoc.run_adhoc_list(f, out=tmp_path / "batch") == 1
+    assert adhoc.run_adhoc_list(f, out=tmp_path / "batch", meta_fetcher=lambda u: None) == 1
     assert "no links" in capsys.readouterr().out
 
 

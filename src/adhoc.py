@@ -143,11 +143,11 @@ def run_adhoc(source: str, *, out: Optional[Path] = None, profile: Optional[str]
 # ── RUNEASY: the one-command multi-video front door ────────────────────────────────────────────
 
 def _parse_links(text: str) -> list[str]:
-    """Strict links.txt template: one URL per line; blank lines and ``#`` comments ignored;
-    duplicates dropped (the same URL twice is one cached event anyway). A function, not a
-    module (CR4)."""
+    """links.txt template: one URL per line (comma-separated URLs on a line are tolerated —
+    observed in Alex's real list); blank lines and ``#`` comments ignored; duplicates dropped
+    (the same URL twice is one cached event anyway). A function, not a module (CR4)."""
     urls: list[str] = []
-    for raw in text.splitlines():
+    for raw in text.replace(",", "\n").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -156,15 +156,25 @@ def _parse_links(text: str) -> list[str]:
     return urls
 
 
+def _slug(title: str, max_len: int = 60) -> str:
+    """Filesystem-safe subject slug for the output folder name."""
+    s = re.sub(r"[^A-Za-z0-9]+", "_", title or "").strip("_")
+    return s[:max_len].rstrip("_")
+
+
 def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
                    redo: bool = False, work_root: Path = WORK_ROOT,
-                   run_one: Optional[Callable] = None) -> int:
+                   run_one: Optional[Callable] = None,
+                   meta_fetcher: Callable = fetch_youtube_meta) -> int:
     """The ONE list loop (CR1) — this same code runs locally and, in remote mode, ON the VM
     (`--source-list … --local`). Per-URL no-drop (a failing video logs ❌ and the loop
     continues — FIX semantics); **skip-completed resume** (a subfolder with notes.md is done;
-    ``redo`` overrides); writes ``PROGRESS`` (`n/total <video_id>`) as it goes and a
+    ``redo`` overrides); writes ``PROGRESS`` (`n/total <folder>`) as it goes and a
     ``BATCH_DONE`` sentinel at the end — the remote poller's whole interface (CR2/CR3).
-    Exit is 0 with failures reported in the tally, never a batch-aborting code."""
+    The output subfolder is named by the video's SUBJECT (`<title-slug>__<video_id>` — Alex
+    2026-07-05; a one-probe metadata fetch, and the id suffix keeps resume deterministic even
+    if the probe fails offline: resume matches any `*<video_id>` folder). Exit is 0 with
+    failures reported in the tally, never a batch-aborting code."""
     run_one = run_one or run_adhoc
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -172,22 +182,24 @@ def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
     if not urls:
         print(f"[run-all] no links found in {list_file}", flush=True)
         return 1
-    total, results = len(urls), []          # results: (video_id, "ok"|"skip"|"fail")
+    total, results = len(urls), []          # results: (folder_name, "ok"|"skip"|"fail")
     for i, url in enumerate(urls, 1):
-        vid = mint_event_id(None, url, date.today())
-        sub = out / vid
-        (out / "PROGRESS").write_text(f"{i}/{total} {vid}\n")
-        if not redo and (sub / "notes.md").exists():
-            print(f"[run-all] {i}/{total} {vid} … SKIP (already complete)", flush=True)
-            results.append((vid, "skip"))
+        meta = meta_fetcher(url) if is_youtube(url) else None
+        vid = mint_event_id(meta, url, date.today())
+        slug = _slug((meta or {}).get("title") or "")
+        sub = out / (f"{slug}__{vid}" if slug else vid)
+        (out / "PROGRESS").write_text(f"{i}/{total} {sub.name}\n")
+        if not redo and any((d / "notes.md").exists() for d in out.glob(f"*{vid}")):
+            print(f"[run-all] {i}/{total} {sub.name} … SKIP (already complete)", flush=True)
+            results.append((sub.name, "skip"))
             continue
-        print(f"[run-all] {i}/{total} {vid} ← {url}", flush=True)
+        print(f"[run-all] {i}/{total} {sub.name} ← {url}", flush=True)
         try:
             rc = run_one(url, out=sub, profile=profile, work_root=work_root)
         except Exception as e:              # no-drop: one bad video never kills the batch
-            print(f"[run-all] ❌ {vid} ({type(e).__name__}: {e})", flush=True)
+            print(f"[run-all] ❌ {sub.name} ({type(e).__name__}: {e})", flush=True)
             rc = 1
-        results.append((vid, "ok" if rc == 0 else "fail"))
+        results.append((sub.name, "ok" if rc == 0 else "fail"))
     _print_batch_summary(out, results)
     (out / "BATCH_DONE").write_text("done\n")
     return 0
