@@ -350,8 +350,9 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   clean); ingest retry (transient-then-success · zero-cost success · dead-URL raises);
   remote (detached launch · poll-until-done · dead-job surfaces log then raises, VM still stopped).
 
-- [ ] **RUNEASY — one-command multi-video front door** (SCOPED 2026-07-05 via the 7-role Q&A;
-  depends on FIX ✓) — make running "a bunch of videos" one short command; **"just type run all"**.
+- [x] **RUNEASY — one-command multi-video front door** (VERIFIED + CLOSED 2026-07-06;
+  scoped 2026-07-05 via the 7-role Q&A; depends on FIX ✓) — make running "a bunch of videos"
+  one short command; **"just type run all"**.
   - *Input (strict template):* `links.txt` — one URL per line, `#` comments, blank lines ignored;
     parsed by a small `_parse_links` function in `adhoc.py` (CR4 — no shallow links module).
     Repo-root default so the command needs zero args. URLs route through the existing `--source`
@@ -388,6 +389,20 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
   **+ VALIDATION CRITERION (Alex 2026-07-05):** a document with **10 video links**, one
   command, PASS = all 10 output subfolders exist with `notes.md` + `coverage_report.md` +
   clean `cognition_status`; any failure is loud in the tally.
+  - **✅ CLOSED OUT 2026-07-06 (acceptance PASSED).** Alex's real `list.txt` (7 links incl. a
+    comma-separated pair — parser upgraded; + subject-named folders `<title-slug>__<id>` added
+    on his ask): **7/7 bundles, ALL 6/6 EVAL gates, zero degraded notes** — subject folders,
+    references, scorecards, one command end-to-end. Resume was exercised across FIVE
+    consecutive real-world failure layers, every one loud, none code-logic: (1) gcloud IAP
+    launch-ssh HOLDS the session then exits 255 → fire-and-forget launch + 120s local timeout
+    (`ac6192b`); (2) YouTube throttles the datacenter IP → the `--local` flag is the
+    mitigation (BATCH is immune — LSIC videos aren't YouTube); (3) local ffmpeg missing →
+    yt-dlp silently skips the merge, exits 0 → loud guard (`3f9b84f`); (4) local `.env` keys
+    were EMPTY (template never filled — every prior real run was VM-side) → values restored
+    from the VM copy; (5) local venv lacked the `anthropic` dep → `pip install -r`. Layers
+    3-5 = the local-runtime-drift class; the degrade machinery caught each exactly as
+    designed (⚠ banner in notes + 1/6 gates — never silent). **Observed cognition cost:**
+    ≈ $2.40-3.60/video (final 4-video leg: $14.40 / 14 calls incl. truncation re-issues).
 
 - [ ] **BATCH — the 122-event run** (was CLOUD_BATCH M-F2) — `run_corpus.sh filter` over the
   122 video-bearing events, 4h cap applied, `--dry-run` cost gate per event, stop on $ ceiling
@@ -475,6 +490,10 @@ _Inherited from CLOUD_BATCH / EASYRUN; resolved within this plan's FIX milestone
 | Cognitive Moves thin (≤7 moves × 1 sentence)         | the prompt itself caps output: "4-7 entries", "one substantive sentence per item, no padding"; 8-tag set; no exemplars | DEPTH v3: ≥10 moves × 2-3 sentences, 15-tag + ACTA probes, few-shot exemplars                 | FIXED (v4: 17 moves; v4.1: 13) |
 | Notes reference talk vernacular never introduced ('nines', 'three jokes') | extraction compressed to insider shorthand — written for someone who watched the talk | SELF-CONTAINED RULE in both prompts (`8420c63`): one-clause setup at first use; terms carry definitions | FIXED (v4.1 verified 2026-07-04) |
 | `--remote` job died with ssh 255 mid-run              | gcloud IAP ssh drops on long silent stretches (a Fable pass thinks for minutes with no output); remote stdout — incl. the cost lines — dies with the channel | FIX: `run_remote_job` → detached nohup + `_lsic_run.log` + DONE/RUNNING/DEAD polls; log tail surfaced locally | FIXED (2026-07-04) |
+| Launch ssh HOLDS the session for the detached job's lifetime, then 255 → orchestrator crashed and the finally-stop killed a healthy batch | gcloud IAP can keep the tunnel open past `& echo LAUNCHED`; `check=True` turned its meaningless 255 into a crash | fire-and-forget launch: `check=False` + 120s local timeout (remote job survives); POLL_DEAD is the real launch detector; auto-stop failures warn instead of masking | FIXED (`ac6192b`, 2026-07-05) |
+| YouTube throttles/blocks the GCP datacenter IP        | repeated yt-dlp pulls from a datacenter address → probes return nothing, downloads die         | mitigation: run stragglers with `--local` (residential IP); v2 option: cookie auth on the VM. BATCH immune (LSIC videos aren't YouTube) | KNOWN  |
+| yt-dlp exits 0 having produced NO file                 | without ffmpeg it downloads the separate streams, skips the merge with only a WARNING          | ffmpeg installed locally + loud guard in `_fetch_youtube` (`3f9b84f`)                          | FIXED (2026-07-05) |
+| Local runtime drift: empty `.env` keys + missing `anthropic` dep (+ overnight network loss) | this machine was never a first-class runtime — every prior real run was VM-side; local venv/config never exercised | keys restored from the VM `.env`; `pip install -r requirements.txt`; long local runs under `caffeinate -i`. Detection was already loud (⚠ cognition banner + 1/6 gates) | KNOWN (mitigated 2026-07-06) |
 | First v4.1 extract burned 4× $1.70 on identical retries | 16k output cap truncated mid-JSON; `call_json` retried identical params at full price | `call_json` fails fast on max_tokens truncation (2026-07-04); raising the cap via streaming is a FIX option | FIXED  |
 
 ### Out of scope (deferred / parallel tracks)
