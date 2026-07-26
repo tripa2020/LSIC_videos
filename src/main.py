@@ -560,8 +560,10 @@ def main() -> int:
                         help="aggregate-video cap per event (e.g. 4 = 4h); unset = no cap")
     parser.add_argument("--out", type=Path, default=None, metavar="DIR",
                         help="--source: also copy the finished Report/ bundle to this folder")
-    parser.add_argument("--profile", type=str, default=None, choices=["briefing", "lecture"],
-                        help="--source/--pipeline: notes template (briefing=LSIC default | lecture=generic talk)")
+    parser.add_argument("--profile", type=str, default=None,
+                        choices=["briefing", "lecture", "paper"],
+                        help="--source/--pipeline: notes template (briefing=LSIC default | "
+                             "lecture=generic talk | paper=standalone PDF, auto for PDF sources)")
     parser.add_argument("--references", action="store_true",
                         help="--pipeline: also run related-paper enrichment (off by default; "
                              "on automatically for --source)")

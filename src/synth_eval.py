@@ -26,6 +26,7 @@ MOVES_FLOOR = 10
 FINAL_THIRD_FLOOR = 2
 
 _TS = re.compile(r"\[(\d+):(\d\d)\]")
+_PAGE = re.compile(r"\[p\.(\d+)\]")   # paper mode: page-number citations
 
 
 def _norm(s: str) -> str:
@@ -43,15 +44,29 @@ def parse_duration_sec(md: str):
     return int(m.group(1)) * 60 + int(m.group(2)) if m else None
 
 
+def parse_pages(md: str):
+    m = re.search(r"^pages: (\d+)", md, re.M)
+    return int(m.group(1)) if m else None
+
+
 def score_notes(md: str) -> dict:
-    dur = parse_duration_sec(md)
-    cites = [int(m.group(1)) * 60 + int(m.group(2)) for m in _TS.finditer(md)]
+    # Paper mode (frontmatter `profile: paper`, written only by the paper template): the same
+    # coverage math in PAGE units — `[p.N]` cites against a `pages: N` span. Every other
+    # bundle takes the [mm:ss] path below unchanged.
+    paper = bool(re.search(r"^profile: paper$", md, re.M))
+    ts = _PAGE if paper else _TS
+
+    def val(m) -> int:
+        return int(m.group(1)) if paper else int(m.group(1)) * 60 + int(m.group(2))
+
+    dur = parse_pages(md) if paper else parse_duration_sec(md)
+    cites = [val(m) for m in ts.finditer(md)]
     deciles = {min(int(t / dur * 10), 9) for t in cites} if (dur and cites) else set()
     bullets = re.findall(r"^- .+$", md, re.M)
 
     moves = _section(md, "Cognitive Moves")
     move_rows = re.findall(r"^- \*\*", moves, re.M)
-    move_ts = [int(m.group(1)) * 60 + int(m.group(2)) for m in _TS.finditer(moves)]
+    move_ts = [val(m) for m in ts.finditer(moves)]
     final_third = [t for t in move_ts if dur and t >= dur * 2 / 3]
 
     founder = _section(md, "Founder Lens — To Market")
@@ -61,7 +76,7 @@ def score_notes(md: str) -> dict:
         "duration_sec": dur,
         "n_cites": len(cites),
         "decile_coverage": round(len(deciles) / 10, 2) if dur else None,
-        "bullet_cite_rate": round(sum(1 for b in bullets if _TS.search(b)) / len(bullets), 2)
+        "bullet_cite_rate": round(sum(1 for b in bullets if ts.search(b)) / len(bullets), 2)
                             if bullets else None,
         "moves": len(move_rows),
         "moves_with_quote": moves.count("> “"),

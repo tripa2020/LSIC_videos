@@ -381,6 +381,8 @@ def synthesize_full(event_id: str, work_root: Path = Path("work"),
     # profile's Outline + description links). Briefing ignores it via **_kwargs.
     video_asset = next((a for a in event.assets if a.kind == "video"), None)
     source_meta = (video_asset.meta if video_asset else None) or {}
+    if video_asset is None:   # video-less (paper) event: the event meta IS the source info
+        source_meta = event.meta or {}
     notes_md = prof.render(
         ing=ing, alignment=alignment, pres_outputs=pres_outputs,
         thematic=thematic, slide_highlights=slide_highlights,
@@ -651,6 +653,30 @@ def lecture_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
     return thematic, []
 
 
+def paper_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
+    """The paper profile owns its synthesis — the lecture flow with the paper descriptive
+    prompt. Evidence here is page-anchored (``paper_align`` puts the page number in the
+    timestamp float), which the windowing, context builder, and cognition core all treat as
+    the plain ordering number it is. No presentations, no role pool."""
+    from src.profiles import paper
+    from src import cognition
+    from src import segment as _segment
+    windows = _segment.segment(ctx.evidence)
+    if len(windows) >= 2:
+        from src import synth_mapreduce
+        thematic = synth_mapreduce.mapreduce_thematic(
+            ctx.client, windows, paper.thematic_prompt(), _call_gemini_json)
+    else:
+        print("  [synthesize] thematic synthesis (descriptive, 1 call)…", flush=True)
+        thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
+                                  system_prompt=paper.thematic_prompt())
+    full_ctx = _build_event_context(ctx.alignment, ctx.evidence, cap=cognition.CONTEXT_CAP)
+    thematic.update(cognition.run(full_ctx, claims=thematic.get("notable_claims") or [],
+                                  reader_domain=ctx.reader_domain,
+                                  current_work=ctx.current_work))
+    return thematic, []
+
+
 def _select_slide_highlights(captions: list[Caption], n: int = 3) -> list[Caption]:
     candidates = [c for c in captions
                   if c.has_diagram and c.visible_text.strip()
@@ -902,5 +928,7 @@ def synthesize(*args, **kwargs):
     return synthesize_full(*args, **kwargs)
 
 
-def synthesize_paper(*args, **kwargs):
-    raise NotImplementedError("synthesize_paper lands at M5b — see PLAN.md")
+def synthesize_paper(event_id: str, work_root: Path = Path("work")) -> Path:
+    """M5b landed as the paper PROFILE (adhoc paper flow): pages → ``paper_align`` →
+    ``synthesize_full(profile="paper")``. This alias keeps the old entry-point name alive."""
+    return synthesize_full(event_id, work_root=work_root, profile="paper")

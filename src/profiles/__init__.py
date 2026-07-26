@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 DEFAULT_PROFILE = "briefing"
-VALID_PROFILES = ("briefing", "lecture")
+VALID_PROFILES = ("briefing", "lecture", "paper")
 
 
 @dataclass(frozen=True)
@@ -42,5 +42,11 @@ def get_profile(name: str | None) -> Profile:
         from src.profiles import lecture
         return Profile("lecture", "", lecture.thematic_prompt(), lecture.render_lecture,
                        synthesize=s.lecture_synthesize,
+                       uses_presentations=False, uses_role_pool=False)
+    if name == "paper":
+        from src import synthesize as s
+        from src.profiles import paper
+        return Profile("paper", "", paper.thematic_prompt(), paper.render_paper,
+                       synthesize=s.paper_synthesize,
                        uses_presentations=False, uses_role_pool=False)
     raise KeyError(f"unknown profile '{name}' (valid: {', '.join(VALID_PROFILES)})")

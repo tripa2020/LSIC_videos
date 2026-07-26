@@ -23,11 +23,19 @@ from src import contracts, util
 WORK_ROOT = Path("work")
 
 _YT_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
+_ARXIV_ID_RE = re.compile(r"arxiv\.org/(?:abs|pdf|html)/(\d{4}\.\d{4,5})(v\d+)?", re.I)
 
 
 def is_youtube(s: str) -> bool:
     """Match ingest's own substring test so acquisition and id-minting agree."""
     return "youtu.be" in s or "youtube.com" in s
+
+
+def is_paper_source(s: str) -> bool:
+    """Any arXiv link, or a .pdf URL / local .pdf path → the paper flow."""
+    if "arxiv.org" in s:
+        return True
+    return s.split("?", 1)[0].split("#", 1)[0].lower().endswith(".pdf")
 
 
 def _youtube_id(url: str) -> Optional[str]:
@@ -123,10 +131,124 @@ def append_event(event: contracts.Event, work_root: Path = WORK_ROOT) -> None:
         path, json.dumps(raw, indent=2, default=str, ensure_ascii=False))
 
 
+# ── papers: PDF / arXiv sources ────────────────────────────────────────────────────────────────
+
+def paper_id_of(source: str) -> str:
+    """Deterministic, date-free event_id for a paper (stable → idempotent re-runs and
+    cross-day resume). arXiv → ``paper_arxiv_<id>``; anything else → ``paper_<slug(stem)>``."""
+    m = _ARXIV_ID_RE.search(source)
+    if m:
+        return f"paper_arxiv_{m.group(1).replace('.', '_')}"
+    stem = Path(source.split("?", 1)[0].split("#", 1)[0]).stem
+    return f"paper_{util.slugify(stem)[:40]}"
+
+
+def _paper_date(source: str) -> Optional[date]:
+    """arXiv ids encode YYMM — a truer event date than 'today'. Non-arXiv → None."""
+    m = _ARXIV_ID_RE.search(source)
+    if m and 1 <= int(m.group(1)[2:4]) <= 12:
+        return date(2000 + int(m.group(1)[:2]), int(m.group(1)[2:4]), 1)
+    return None
+
+
+def _pdf_url(source: str) -> str:
+    """Normalize arXiv abs/html links to the PDF endpoint; other URLs pass through."""
+    m = _ARXIV_ID_RE.search(source)
+    if m:
+        return f"https://arxiv.org/pdf/{m.group(1)}{m.group(2) or ''}"
+    return source
+
+
+def _pdf_title(path: Path) -> str:
+    """Title for the output-folder slug: PDF metadata, else the first plausible line of page 1
+    (arXiv PDFs rarely set metadata). Any failure → "" (caller falls back to the stem)."""
+    try:
+        import fitz
+        doc = fitz.open(str(path))
+        try:
+            t = ((doc.metadata or {}).get("title") or "").strip()
+            first_page = doc[0].get_text() if len(doc) else ""
+        finally:
+            doc.close()
+        if t:
+            return t
+        for line in first_page.splitlines():
+            s = line.strip()
+            if len(s) >= 8 and not s.lower().startswith("arxiv:"):
+                return s[:120]
+    except Exception:
+        pass
+    return ""
+
+
+def _fetch_pdf_http(url: str, dest: Path) -> None:
+    from src import ingest
+    ingest._fetch_http(url, dest)
+
+
+def fetch_paper(source: str, *, work_root: Path = WORK_ROOT,
+                fetcher: Optional[Callable] = None) -> tuple[Path, dict]:
+    """PDF URL or local path → (local pdf, {paper_id, title, date}). The download is cached
+    under ``work/adhoc_sources/<paper_id>.pdf`` so the list-probe (folder naming) and the run
+    itself share one fetch. ``fetcher`` is injectable — tests never touch the network."""
+    pid = paper_id_of(source)
+    if source.startswith(("http://", "https://")):
+        dest = Path(work_root) / "adhoc_sources" / f"{pid}.pdf"
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            (fetcher or _fetch_pdf_http)(_pdf_url(source), dest)
+    else:
+        dest = Path(source).expanduser().resolve()
+        if not dest.is_file():
+            raise FileNotFoundError(f"ad-hoc paper not found: {source}")
+    title = _pdf_title(dest) or dest.stem
+    return dest, {"paper_id": pid, "title": title, "date": _paper_date(source)}
+
+
+def build_adhoc_paper_event(source: str, pdf_path: Path, meta: dict) -> contracts.Event:
+    """PDF → single-asset Event. The asset is minted ``kind="host_deck"`` (not ``"paper"``) so
+    ingest extracts it into ``01_ingest/decks/`` — the directory ``paper_align`` and
+    ``slide_book`` already read; zero edits to ingest routing."""
+    asset = contracts.Asset(
+        kind="host_deck", path=pdf_path, lsic_id=1,
+        source_url=source if source.startswith("http") else None,
+        meta={"source": source, "title": meta.get("title")})
+    return contracts.Event(
+        event_id=meta["paper_id"], date=meta.get("date") or date.today(), assets=[asset],
+        meta={"adhoc": True, "paper": True, "source": source,
+              "title": meta.get("title"), "profile": "paper"})
+
+
+def run_adhoc_paper(source: str, *, out: Optional[Path] = None, work_root: Path = WORK_ROOT,
+                    fetcher: Optional[Callable] = None) -> int:
+    """Paper twin of ``run_adhoc``: fetch → ingest → page-anchored align → paper-profile
+    synthesis (+eval) → references → slide_book → Report. Chains the stage functions directly
+    because ``pipeline_cmd`` is (correctly) gated on events having video; every stage keeps
+    its own skip-when-complete contract, so re-runs are cheap and crash-resumable."""
+    from src import main as main_mod, paper_align, report as report_mod, synthesize as synth_mod
+    pdf_path, meta = fetch_paper(source, work_root=work_root, fetcher=fetcher)
+    event = build_adhoc_paper_event(source, pdf_path, meta)
+    append_event(event, work_root=work_root)
+    print(f"[adhoc] {source} → paper event {event.event_id} ({meta.get('title')})", flush=True)
+    if (rc := main_mod.ingest_cmd(event.event_id, all_flag=False)) != 0:
+        return rc
+    paper_align.align_paper(event.event_id, work_root=work_root)
+    synth_mod.synthesize_full(event.event_id, work_root=work_root, profile="paper")
+    main_mod.enrich_cmd(event.event_id)      # related-paper references; skip-stub offline
+    main_mod.slide_book_cmd(event.event_id)  # page curation → slides.pdf + equations.md
+    if (rc := main_mod.report_cmd(event.event_id)) != 0:
+        return rc
+    if out is not None:
+        report_mod.assemble_report(event.event_id, work_root=work_root, dest_dir=Path(out))
+    return 0
+
+
 def run_adhoc(source: str, *, out: Optional[Path] = None, profile: Optional[str] = None,
               work_root: Path = WORK_ROOT) -> int:
     """Build the event, register it, run the full pipeline, optionally copy Report → ``out``."""
     from src import main as main_mod, report as report_mod
+    if is_paper_source(source):   # papers bake their own template; ``profile`` is video-only
+        return run_adhoc_paper(source, out=out, work_root=work_root)
     event = build_adhoc_event(source)
     if profile:
         event.meta = {**(event.meta or {}), "profile": profile}
@@ -165,7 +287,8 @@ def _slug(title: str, max_len: int = 60) -> str:
 def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
                    redo: bool = False, work_root: Path = WORK_ROOT,
                    run_one: Optional[Callable] = None,
-                   meta_fetcher: Callable = fetch_youtube_meta) -> int:
+                   meta_fetcher: Callable = fetch_youtube_meta,
+                   paper_fetcher: Optional[Callable] = None) -> int:
     """The ONE list loop (CR1) — this same code runs locally and, in remote mode, ON the VM
     (`--source-list … --local`). Per-URL no-drop (a failing video logs ❌ and the loop
     continues — FIX semantics); **skip-completed resume** (a subfolder with notes.md is done;
@@ -184,8 +307,19 @@ def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
         return 1
     total, results = len(urls), []          # results: (folder_name, "ok"|"skip"|"fail")
     for i, url in enumerate(urls, 1):
-        meta = meta_fetcher(url) if is_youtube(url) else None
-        vid = mint_event_id(meta, url, date.today())
+        if is_paper_source(url):
+            # papers probe by downloading (cached — the run reuses the same file); the id is
+            # date-free so resume matches across days even when the probe fails offline
+            try:
+                _, meta = fetch_paper(url, work_root=work_root, fetcher=paper_fetcher)
+            except Exception as e:
+                print(f"[run-all] paper probe failed for {url} "
+                      f"({type(e).__name__}: {e})", flush=True)
+                meta = {"paper_id": paper_id_of(url)}
+            vid = meta["paper_id"]
+        else:
+            meta = meta_fetcher(url) if is_youtube(url) else None
+            vid = mint_event_id(meta, url, date.today())
         slug = _slug((meta or {}).get("title") or "")
         sub = out / (f"{slug}__{vid}" if slug else vid)
         (out / "PROGRESS").write_text(f"{i}/{total} {sub.name}\n")
