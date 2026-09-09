@@ -225,17 +225,9 @@ def run_event_stages(evt: str,
 
 def _make_batch_caller():
     """Build a BatchCaller over a real Gemini client (used only when --batch is passed)."""
-    import os
-
-    from dotenv import load_dotenv
-    from google import genai
-
+    from src import gemini_caller
     from src.llm_caller import BatchCaller
-    load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set — required for --batch")
-    return BatchCaller(genai.Client(api_key=api_key))
+    return BatchCaller(gemini_caller.make_client())
 
 
 def _staged(prefill_fn, caller, cmd):

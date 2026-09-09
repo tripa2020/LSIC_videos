@@ -18,17 +18,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
-from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-from src import util
+from src import gemini_caller, util
 from src.contracts import IngestResult, Segment  # noqa: F401 (Segment used above)
 
 
@@ -38,6 +35,7 @@ GEMINI_MODEL = "gemini-2.5-flash"
 ASR_CONCURRENCY = int(os.getenv("ASR_CONCURRENCY", "12"))  # chunks transcribed in parallel
 MAX_OUTPUT_TOKENS = 32_768     # raise from the 8,192 default so dense chunks don't truncate
 MAX_SPLIT_DEPTH = 3            # backstop: halve a chunk that still overflows, up to 3 levels
+ASR_TIMEOUT_MS = 180_000       # request timeout: a network blip raises (→ retried), never hangs
 
 ASR_PROMPT = """\
 Transcribe the attached audio.
@@ -65,12 +63,18 @@ class _AsrRow(BaseModel):
     language: Optional[str] = None
 
 
+def _asr_config():
+    """The one ASR request config — shared by the live call and the batch prefill."""
+    return types.GenerateContentConfig(
+        temperature=0.0,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        response_mime_type="application/json",
+        response_schema=list[_AsrRow],
+    )
+
+
 # ---- pure, injectable logic (unit-tested with fakes, no network) -------------
-
-def _transient(e: Exception) -> bool:
-    """Retryable Gemini/network/DNS errors — delegates to the shared classifier."""
-    return util.is_transient(e)
-
 
 def _parse_segments(parsed: Optional[list], offset: float) -> list[Segment]:
     """Structured ASR rows → Segments with the chunk offset applied. Skips malformed rows."""
@@ -123,13 +127,6 @@ def _transcribe_segment(audio: object, offset: float, call_fn: CallFn, split_fn:
     return out
 
 
-def _finish_reason(resp) -> str:
-    try:
-        return str(resp.candidates[0].finish_reason)
-    except (AttributeError, IndexError, TypeError):
-        return ""
-
-
 def _probe_duration(path: Path) -> float:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -159,13 +156,7 @@ class Transcriber(Protocol):
 class GeminiTranscriber:
     def __init__(self, model: str = GEMINI_MODEL, chunk_sec: int = DEFAULT_CHUNK_SEC,
                  concurrency: int = ASR_CONCURRENCY):
-        load_dotenv()
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY not set in .env")
-        # request timeout so a network blip raises (→ retried) instead of hanging forever
-        self.client = genai.Client(api_key=api_key,
-                                   http_options=types.HttpOptions(timeout=180_000))
+        self.client = gemini_caller.make_client(timeout_ms=ASR_TIMEOUT_MS)
         self.model = model
         self.chunk_sec = chunk_sec
         self.concurrency = max(1, concurrency)
@@ -174,39 +165,17 @@ class GeminiTranscriber:
 
     def _call_api(self, audio_path: object) -> "tuple[Optional[list], str]":
         """Inline-Opus + generate (structured output). Returns (rows|None, finish_reason).
-        finish_reason MAX_TOKENS → (None, 'MAX_TOKENS') so the caller splits the audio.
-        The audio is transcoded to ~32 kbps Opus and sent inline (one request, no upload)."""
+        A MAX_TOKENS finish → (None, 'MAX_TOKENS') so the caller splits the audio.
+        The audio is transcoded to ~32 kbps Opus and sent inline (one request, no upload);
+        retry policy + JSON parsing live in ``gemini_caller``."""
         part = types.Part.from_bytes(data=_to_opus_bytes(Path(audio_path)), mime_type="audio/ogg")
-        for attempt in range(5):
-            try:
-                resp = self.client.models.generate_content(
-                    model=self.model,
-                    contents=[ASR_PROMPT, part],
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                        max_output_tokens=MAX_OUTPUT_TOKENS,
-                        response_mime_type="application/json",
-                        response_schema=list[_AsrRow],
-                    ),
-                )
-                finish = _finish_reason(resp)
-                if "MAX_TOKENS" in finish:
-                    return None, "MAX_TOKENS"          # signal: split + retry on halves
-                return json.loads(resp.text or "[]"), finish
-            except json.JSONDecodeError:                # rare partial body → re-request
-                if attempt < 4:
-                    time.sleep(3 * (attempt + 1))
-                    continue
-                raise
-            except Exception as e:                      # transient overload/disconnect → retry
-                if _transient(e) and attempt < 4:
-                    print(f"    [transcribe] transient ({str(e)[:70]}) — retry {attempt + 1}/5",
-                          flush=True)
-                    time.sleep(5 * (attempt + 1))
-                    continue
-                raise
-        raise RuntimeError("ASR call failed after retries")
+        try:
+            rows = gemini_caller.generate_json(
+                self.client, model=self.model, contents=[ASR_PROMPT, part],
+                config=_asr_config(), expect=list, tag="transcribe")
+        except gemini_caller.Truncated:
+            return None, "MAX_TOKENS"          # signal: split + retry on halves
+        return rows, "STOP"
 
     def _split_audio(self, audio_path: object, offset: float) -> "list[tuple[object, float]]":
         """Halve an over-dense audio chunk via ffmpeg; offsets map onto the event timeline."""
@@ -303,8 +272,6 @@ def batch_prefill_chunks(event_id: str, caller, work_root: Path = WORK_ROOT) -> 
     dense chunk whose JSON is token-truncated fails to parse → it is left uncached and the
     sync loop re-does it WITH the adaptive split (R4). Slicing/cap (M-C4) is not applied here
     yet, so a later capped sync run simply fills any chunk this prefill didn't cover."""
-    from google.genai import types
-
     from src.batch_gemini import response_text
     from src.llm_caller import LLMRequest, prefill
 
@@ -324,12 +291,7 @@ def batch_prefill_chunks(event_id: str, caller, work_root: Path = WORK_ROOT) -> 
                 model=GEMINI_MODEL,
                 contents=[ASR_PROMPT,
                           types.Part.from_bytes(data=_to_opus_bytes(cp), mime_type="audio/ogg")],
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    max_output_tokens=MAX_OUTPUT_TOKENS,
-                    response_mime_type="application/json",
-                    response_schema=list[_AsrRow]))
+                config=_asr_config())
             for (cp, off) in pending]
 
     def write_one(cid: str, resp) -> None:

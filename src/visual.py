@@ -13,26 +13,23 @@ captioned by Gemini VLM. Per-frame cache so kill mid-loop doesn't lose work.
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
 from pathlib import Path
 from typing import Optional, Protocol
 
 import cv2
 import imagehash
-from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 from PIL import Image
 from scenedetect import detect, ContentDetector
 
-from src import util
+from src import gemini_caller, util
 from src.contracts import Caption, IngestResult, Segment, VideoPart
 
 
 WORK_ROOT = Path("work")
 GEMINI_MODEL = "gemini-2.5-flash"
+VLM_TIMEOUT_MS = 90_000
 SCENE_THRESHOLD = 27.0
 SAFETY_NET_SEC = 60.0
 PHASH_HAMMING_MAX = 4
@@ -59,9 +56,12 @@ Return ONLY a JSON object (no prose, no markdown fences) with these fields:
 If the frame is clearly a slide, prioritize verbatim text capture."""
 
 
-def _transient(e: Exception) -> bool:
-    """Retryable Gemini/network/DNS errors — delegates to the shared classifier."""
-    return util.is_transient(e)
+def _vlm_config():
+    """The one VLM request config — shared by the live call, the batch prefill, and slide_book."""
+    return types.GenerateContentConfig(
+        temperature=0.0,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
 
 
 class Describer(Protocol):
@@ -69,39 +69,18 @@ class Describer(Protocol):
 
 
 class GeminiDescriber:
+    """Gemini VLM client holder. ``client``/``model`` are also borrowed by ``slide_book``."""
+
     def __init__(self, model: str = GEMINI_MODEL):
-        load_dotenv()
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY not set in .env")
-        self.client = genai.Client(api_key=api_key,
-                                   http_options=types.HttpOptions(timeout=90_000))
+        self.client = gemini_caller.make_client(timeout_ms=VLM_TIMEOUT_MS)
         self.model = model
 
     def caption(self, image_path: Path) -> dict:
-        img_bytes = image_path.read_bytes()
-        last: Exception | None = None
-        for attempt in range(4):
-            try:
-                resp = self.client.models.generate_content(
-                    model=self.model,
-                    contents=[
-                        VLM_PROMPT,
-                        types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-                    ],
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                )
-                return json.loads(util.strip_fences(resp.text or ""))
-            except Exception as e:  # transient overload → backoff + retry
-                last = e
-                if _transient(e) and attempt < 3:
-                    time.sleep(2 * (attempt + 1))
-                    continue
-                raise
-        raise last  # unreachable
+        return gemini_caller.generate_json(
+            self.client, model=self.model,
+            contents=[VLM_PROMPT,
+                      types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg")],
+            config=_vlm_config(), expect=dict, attempts=4, base_delay=2.0, tag="visual")
 
 
 def _kept_frames(ing: IngestResult, workdir: Path,
@@ -147,7 +126,6 @@ def batch_prefill_captions(event_id: str, caller, work_root: Path = WORK_ROOT) -
     Writes visual's own ``<frame>.caption.json`` cache (R1). The subsequent ``extract_visual``
     run finds them CACHED and makes no live call — so the sync path stays byte-identical.
     Frames missing from the batch result (failures, R4) are left uncached for that loop."""
-    from google.genai import types
     from src.batch_gemini import response_text
     from src.llm_caller import LLMRequest, prefill
 
@@ -164,9 +142,7 @@ def batch_prefill_captions(event_id: str, caller, work_root: Path = WORK_ROOT) -
                 model=GEMINI_MODEL,
                 contents=[VLM_PROMPT,
                           types.Part.from_bytes(data=png.read_bytes(), mime_type="image/jpeg")],
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0)))
+                config=_vlm_config())
             for (t, png, trig) in pending]
 
     def write_one(cid: str, resp) -> None:

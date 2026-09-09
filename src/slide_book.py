@@ -79,7 +79,7 @@ def batch_prefill_slides(event_id: str, caller, work_root: Path = WORK_ROOT) -> 
     from google.genai import types
     from src.batch_gemini import response_text
     from src.llm_caller import LLMRequest, prefill
-    from src.visual import GEMINI_MODEL
+    from src.visual import GEMINI_MODEL, _vlm_config
 
     decks_dir = work_root / "events" / event_id / util.STAGE_INGEST / "decks"
     if not decks_dir.is_dir():
@@ -92,9 +92,7 @@ def batch_prefill_slides(event_id: str, caller, work_root: Path = WORK_ROOT) -> 
                 model=GEMINI_MODEL,
                 contents=[VLM_PROMPT,
                           types.Part.from_bytes(data=png.read_bytes(), mime_type="image/png")],
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0)))
+                config=_vlm_config())
             for (a, n, png) in pending]
 
     def write_one(cid: str, resp) -> None:
@@ -241,28 +239,17 @@ def _curate_slide(describer: GeminiDescriber, png_path: Path, cache_path: Path) 
 
 
 def _vlm_curate(describer: GeminiDescriber, png_path: Path) -> dict:
-    """One Gemini VLM call per slide. Returns the curated dict.
-
-    Image (multimodal) requests hit Gemini's more-contended image capacity, which
-    returns intermittent 503s (~8% measured) even while text calls are clean — so the
-    call is wrapped in the shared ``retry_transient`` policy (the only retry synth
-    already had and this stage lacked). Only the network call retries; the JSON parse
-    stays outside, so a malformed-but-200 response is not retried (unchanged behavior).
-    """
+    """One Gemini VLM call per slide → the curated dict. Image requests hit Gemini's
+    more-contended image capacity (intermittent 503s, ~8% measured), so the call rides the
+    shared ``gemini_caller`` retry policy — transient errors AND a malformed body re-issue."""
     from google.genai import types
-    img_bytes = png_path.read_bytes()
-    resp = util.retry_transient(lambda: describer.client.models.generate_content(
-        model=describer.model,
-        contents=[
-            VLM_PROMPT,
-            types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-    ))
-    return json.loads(util.strip_fences(resp.text or ""))
+    from src import gemini_caller
+    from src.visual import _vlm_config
+    return gemini_caller.generate_json(
+        describer.client, model=describer.model,
+        contents=[VLM_PROMPT,
+                  types.Part.from_bytes(data=png_path.read_bytes(), mime_type="image/png")],
+        config=_vlm_config(), expect=dict, tag="slide_book")
 
 
 def _topic_words(t: str) -> set[str]:
