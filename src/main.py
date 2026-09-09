@@ -246,15 +246,51 @@ def _staged(prefill_fn, caller, cmd):
     return run
 
 
+def event_stages(ev: str, *, paper: bool = False, caller=None, cap_sec: float | None = None,
+                 profile: str | None = None,
+                 references: bool = False) -> list[tuple[str, Callable[[], int]]]:
+    """The ONE stage chain for an event, as (name, fn) pairs — order from
+    ``status.stage_names(paper)``; this function only maps names to stage functions.
+
+    Every stage is wrapped in ``_staged``: with ``caller=None`` (default) the wrapper is a pure
+    passthrough, so batch and non-batch runs share one list (Reduction 4). ``paper`` events
+    (PDF sources) take the page-anchored align and the paper profile; ``references`` inserts
+    the opt-in enrich stage right after synthesize (both chains)."""
+    from src import status as status_mod
+    prefill = {}
+    if caller is not None:
+        from src import slide_book as sb_mod, transcribe as tr_mod, visual as vis_mod
+        prefill = {"transcribe": lambda c: tr_mod.batch_prefill_chunks(ev, c),
+                   "visual": lambda c: vis_mod.batch_prefill_captions(ev, c),
+                   "slide_book": lambda c: sb_mod.batch_prefill_slides(ev, c)}
+    prof = (profile or "paper") if paper else profile
+    fns: dict[str, Callable[[], int]] = {
+        "ingest": lambda: ingest_cmd(ev, all_flag=False, cap_sec=cap_sec),
+        "transcribe": lambda: transcribe_cmd(ev, max_sec=None),
+        "visual": lambda: visual_cmd(ev),
+        "align": (lambda: paper_align_cmd(ev)) if paper else (lambda: align_cmd(ev)),
+        "synthesize": lambda: synthesize_cmd(ev, max_sec=None, profile=prof),
+        "enrich": lambda: enrich_cmd(ev),
+        "slide_book": lambda: slide_book_cmd(ev),
+        "report": lambda: report_cmd(ev),
+    }
+    names = status_mod.stage_names(paper)
+    if references:   # M3: enrich right after synthesize (opt-in for pipeline; adhoc forces on)
+        names.insert(names.index("synthesize") + 1, "enrich")
+    return [(n, _staged(prefill.get(n), caller, fns[n])) for n in names]
+
+
 def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
                  batch: bool = False, cap_sec: float | None = None,
                  profile: str | None = None, references: bool = False) -> int:
-    """Chain ingest→transcribe→visual→align→synthesize→slide_book→report per event.
+    """Run each target event's stage chain (``event_stages``) in order.
 
-    keep_going=False (default) aborts the batch on the first failing stage (today's
-    behavior). keep_going=True continues to the next event and prints a final matrix.
+    Targets: ``--event <id>`` for any video-bearing OR paper event (a paper selects the paper
+    chain — the old "has no video" refusal is defined out of existence); ``--all`` stays
+    video-only (the 122-run contract). keep_going=False (default) aborts the batch on the
+    first failing stage; keep_going=True continues and prints a final matrix.
     """
-    from src import discover as discover_mod, ingest as ingest_mod
+    from src import discover as discover_mod, ingest as ingest_mod, status as status_mod
     events_path = Path("work/events.json")
     if not events_path.exists():
         print("[pipeline] no events.json — running --discover first…", flush=True)
@@ -263,6 +299,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
     events, _ = ingest_mod.load_events_json()
     have_video = {e.event_id for e in events
                   if any(a.kind == "video" for a in e.assets)}
+    papers = {e.event_id for e in events if status_mod.is_paper_event(e)}
 
     if all_flag:
         targets = sorted(have_video)
@@ -270,7 +307,7 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
         if event_id not in {e.event_id for e in events}:
             print(f"unknown event_id '{event_id}'", file=sys.stderr)
             return 1
-        if event_id not in have_video:
+        if event_id not in have_video and event_id not in papers:
             print(f"{event_id} has no video — pipeline requires ingest/transcribe/visual",
                   file=sys.stderr)
             return 1
@@ -280,39 +317,12 @@ def pipeline_cmd(event_id: str | None, all_flag: bool, keep_going: bool = False,
         return 1
 
     caller = _make_batch_caller() if batch else None     # None ⇒ degrade-to-today
-    if caller is not None:
-        from src import slide_book as sb_mod, transcribe as tr_mod, visual as vis_mod
 
     failures: list[tuple[str, str]] = []   # (event_id, stage) for --keep-going summary
     for k, evt in enumerate(targets, 1):
         print(f"\n========== event {k}/{len(targets)}: {evt} ==========", flush=True)
-        if caller is None:
-            stages = [
-                ("ingest", lambda: ingest_cmd(evt, all_flag=False, cap_sec=cap_sec)),
-                ("transcribe", lambda: transcribe_cmd(evt, max_sec=None)),
-                ("visual", lambda: visual_cmd(evt)),
-                ("align", lambda: align_cmd(evt)),
-                ("synthesize", lambda: synthesize_cmd(evt, max_sec=None, profile=profile)),
-                ("slide_book", lambda: slide_book_cmd(evt)),
-                ("report", lambda: report_cmd(evt)),
-            ]
-        else:
-            ev = evt   # bind per-iteration for the closures below
-            stages = [
-                ("ingest", lambda: ingest_cmd(ev, all_flag=False, cap_sec=cap_sec)),
-                ("transcribe", _staged(lambda c: tr_mod.batch_prefill_chunks(ev, c),
-                                       caller, lambda: transcribe_cmd(ev, max_sec=None))),
-                ("visual", _staged(lambda c: vis_mod.batch_prefill_captions(ev, c),
-                                   caller, lambda: visual_cmd(ev))),
-                ("align", lambda: align_cmd(ev)),
-                ("synthesize", lambda: synthesize_cmd(ev, max_sec=None, profile=profile)),
-                ("slide_book", _staged(lambda c: sb_mod.batch_prefill_slides(ev, c),
-                                       caller, lambda: slide_book_cmd(ev))),
-                ("report", lambda: report_cmd(ev)),
-            ]
-        if references:   # M3: insert the enrich stage right after synthesize (opt-in for pipeline)
-            syn_idx = next(i for i, (n, _) in enumerate(stages) if n == "synthesize")
-            stages.insert(syn_idx + 1, ("enrich", lambda: enrich_cmd(evt)))
+        stages = event_stages(evt, paper=evt in papers, caller=caller, cap_sec=cap_sec,
+                              profile=profile, references=references)
         ok, failed = run_event_stages(evt, stages)
         if not ok:
             failures.append((evt, failed))
@@ -346,6 +356,18 @@ def align_cmd(event_id: str | None) -> int:
         print(f"          • {p.asset_id} \"{p.title[:50]}\" "
               f"[{int(p.start//60):02d}:{int(p.start%60):02d} → "
               f"{int(p.end//60):02d}:{int(p.end%60):02d}] score={p.match_score:.0f}")
+    return 0
+
+
+def paper_align_cmd(event_id: str | None) -> int:
+    """Paper twin of --align: PDF pages → Sections + page-numbered Evidence (no LLM)."""
+    from src import paper_align
+    if not event_id:
+        print("paper align requires --event <id>", file=sys.stderr)
+        return 1
+    result = paper_align.align_paper(event_id)
+    print(f"[align/paper] {event_id} → work/events/{event_id}/04_aligned/ "
+          f"({len(result.sections)} pages)")
     return 0
 
 

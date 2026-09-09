@@ -221,26 +221,19 @@ def build_adhoc_paper_event(source: str, pdf_path: Path, meta: dict) -> contract
 
 def run_adhoc_paper(source: str, *, out: Optional[Path] = None, work_root: Path = WORK_ROOT,
                     fetcher: Optional[Callable] = None) -> int:
-    """Paper twin of ``run_adhoc``: fetch → ingest → page-anchored align → paper-profile
-    synthesis (+eval) → references → slide_book → Report. Chains the stage functions directly
-    because ``pipeline_cmd`` is (correctly) gated on events having video; every stage keeps
-    its own skip-when-complete contract, so re-runs are cheap and crash-resumable."""
-    from src import main as main_mod, paper_align, report as report_mod, synthesize as synth_mod
+    """Paper twin of ``run_adhoc``: fetch → mint → register → the ONE stage chain
+    (``pipeline_cmd`` selects the paper chain from ``meta.paper``: ingest → page-anchored
+    align → paper-profile synthesis (+eval) → references → slide_book → Report). Same
+    exception-safe runner and skip-when-complete resume as every video event."""
+    from src import main as main_mod, report as report_mod
     pdf_path, meta = fetch_paper(source, work_root=work_root, fetcher=fetcher)
     event = build_adhoc_paper_event(source, pdf_path, meta)
     append_event(event, work_root=work_root)
     print(f"[adhoc] {source} → paper event {event.event_id} ({meta.get('title')})", flush=True)
-    if (rc := main_mod.ingest_cmd(event.event_id, all_flag=False)) != 0:
-        return rc
-    paper_align.align_paper(event.event_id, work_root=work_root)
-    synth_mod.synthesize_full(event.event_id, work_root=work_root, profile="paper")
-    main_mod.enrich_cmd(event.event_id)      # related-paper references; skip-stub offline
-    main_mod.slide_book_cmd(event.event_id)  # page curation → slides.pdf + equations.md
-    if (rc := main_mod.report_cmd(event.event_id)) != 0:
-        return rc
-    if out is not None:
+    rc = main_mod.pipeline_cmd(event.event_id, all_flag=False, profile="paper", references=True)
+    if rc == 0 and out is not None:
         report_mod.assemble_report(event.event_id, work_root=work_root, dest_dir=Path(out))
-    return 0
+    return rc
 
 
 def run_adhoc(source: str, *, out: Optional[Path] = None, profile: Optional[str] = None,

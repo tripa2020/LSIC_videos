@@ -324,25 +324,110 @@ def test_synth_eval_video_mode_byte_identical():
 
 # ---------- run_adhoc_paper stage chain ----------
 
-def test_run_adhoc_paper_chains_stages_and_copies_report(monkeypatch, tmp_path):
-    from src import main as main_mod, report as report_mod, synthesize as synth_mod
-    order = []
+def test_run_adhoc_paper_registers_then_runs_the_one_chain(monkeypatch, tmp_path):
+    """Reduction 2: the paper front door no longer hand-chains stages — it mints + registers
+    the event and hands off to ``pipeline_cmd`` (paper profile, references on), copying the
+    Report only on rc == 0."""
+    from src import main as main_mod, report as report_mod
+    order, calls = [], {}
     pdf = _tiny_pdf(tmp_path / "src.pdf")
     monkeypatch.setattr(adhoc, "fetch_paper",
                         lambda s, **kw: (pdf, {"paper_id": "paper_p", "title": "T", "date": None}))
     monkeypatch.setattr(adhoc, "append_event", lambda e, work_root: order.append("append"))
-    monkeypatch.setattr(main_mod, "ingest_cmd", lambda eid, all_flag: order.append("ingest") or 0)
-    monkeypatch.setattr(paper_align, "align_paper",
-                        lambda eid, work_root: order.append("align"))
-    monkeypatch.setattr(synth_mod, "synthesize_full",
-                        lambda eid, work_root, profile: order.append(f"synth:{profile}"))
-    monkeypatch.setattr(main_mod, "enrich_cmd", lambda eid: order.append("enrich") or 0)
-    monkeypatch.setattr(main_mod, "slide_book_cmd", lambda eid: order.append("book") or 0)
-    monkeypatch.setattr(main_mod, "report_cmd", lambda eid: order.append("report") or 0)
+
+    def fake_pipeline(eid, all_flag, **kw):
+        calls.update(eid=eid, **kw)
+        order.append("pipeline")
+        return 0
+    monkeypatch.setattr(main_mod, "pipeline_cmd", fake_pipeline)
     monkeypatch.setattr(report_mod, "assemble_report",
                         lambda eid, work_root, dest_dir: order.append(f"copy:{dest_dir.name}"))
     rc = adhoc.run_adhoc_paper("https://arxiv.org/pdf/2410.19811",
                                out=tmp_path / "bundle", work_root=tmp_path)
     assert rc == 0
-    assert order == ["append", "ingest", "align", "synth:paper",
-                     "enrich", "book", "report", "copy:bundle"]
+    assert order == ["append", "pipeline", "copy:bundle"]
+    assert calls == {"eid": "paper_p", "profile": "paper", "references": True}
+
+    # a failing chain → no Report copy, rc propagated
+    order.clear()
+    monkeypatch.setattr(main_mod, "pipeline_cmd", lambda eid, all_flag, **kw: 1)
+    assert adhoc.run_adhoc_paper("https://arxiv.org/pdf/2410.19811",
+                                 out=tmp_path / "bundle", work_root=tmp_path) == 1
+    assert order == ["append"]
+
+
+def _stub_stage_cmds(monkeypatch, order):
+    """Replace every stage command in main with an order-recording stub."""
+    from src import main as main_mod
+    monkeypatch.setattr(main_mod, "ingest_cmd",
+                        lambda eid, all_flag, cap_sec=None: order.append("ingest") or 0)
+    monkeypatch.setattr(main_mod, "transcribe_cmd", lambda eid, max_sec: order.append("transcribe") or 0)
+    monkeypatch.setattr(main_mod, "visual_cmd", lambda eid: order.append("visual") or 0)
+    monkeypatch.setattr(main_mod, "align_cmd", lambda eid: order.append("align") or 0)
+    monkeypatch.setattr(main_mod, "paper_align_cmd", lambda eid: order.append("paper_align") or 0)
+    monkeypatch.setattr(main_mod, "synthesize_cmd",
+                        lambda eid, max_sec, profile=None: order.append(f"synth:{profile}") or 0)
+    monkeypatch.setattr(main_mod, "enrich_cmd", lambda eid: order.append("enrich") or 0)
+    monkeypatch.setattr(main_mod, "slide_book_cmd", lambda eid: order.append("book") or 0)
+    monkeypatch.setattr(main_mod, "report_cmd", lambda eid: order.append("report") or 0)
+
+
+def test_event_stages_paper_chain_order(monkeypatch):
+    """The paper chain: ingest → page-align → paper synth → enrich → book → report; the
+    video chain is today's order, untouched. One list, built by one function."""
+    from src import main as main_mod
+    order = []
+    _stub_stage_cmds(monkeypatch, order)
+    for name, fn in main_mod.event_stages("paper_p", paper=True, references=True):
+        fn()
+    assert order == ["ingest", "paper_align", "synth:paper", "enrich", "book", "report"]
+
+    order.clear()
+    for name, fn in main_mod.event_stages("yt_x", references=False, profile="lecture"):
+        fn()
+    assert order == ["ingest", "transcribe", "visual", "align", "synth:lecture", "book", "report"]
+    # names come from the single owner of stage order
+    from src import status
+    assert [n for n, _ in main_mod.event_stages("yt_x")] == status.stage_names(False)
+
+
+def test_pipeline_cmd_routes_paper_event_without_video(monkeypatch, tmp_path):
+    """A video-less event flagged meta.paper is accepted and runs the paper chain (the old
+    "has no video" refusal is gone); an unflagged video-less event is still refused."""
+    from src import main as main_mod, ingest as ingest_mod
+    from src.contracts import Asset, Event
+    order = []
+    _stub_stage_cmds(monkeypatch, order)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "events.json").write_text("{}")
+    deck = Asset(kind="host_deck", path=tmp_path / "p.pdf", lsic_id=1)
+    paper = Event(event_id="paper_p", date=date(2024, 10, 1), assets=[deck], meta={"paper": True})
+    decks_only = Event(event_id="lsic_decks", date=date(2024, 10, 1), assets=[deck], meta={})
+    monkeypatch.setattr(ingest_mod, "load_events_json", lambda *a, **k: ([paper, decks_only], []))
+
+    assert main_mod.pipeline_cmd("paper_p", all_flag=False, references=True) == 0
+    assert order == ["ingest", "paper_align", "synth:paper", "enrich", "book", "report"]
+    order.clear()
+    assert main_mod.pipeline_cmd("lsic_decks", all_flag=False) == 1   # unchanged refusal
+    assert order == []
+    assert main_mod.pipeline_cmd(None, all_flag=True) == 0             # --all stays video-only
+    assert order == []
+
+
+def test_status_matrix_is_paper_aware(tmp_path, capsys):
+    """status reads the same chain: a paper's 'next' is align, not transcribe; the columns a
+    paper never runs show '—'."""
+    from src import status, util
+    root = tmp_path / "events"
+    ev = root / "paper_p"
+    ing = ev / util.STAGE_INGEST / "manifest.json"
+    ing.parent.mkdir(parents=True)
+    util.write_with_manifest(ing, "{}", stage="ingest")
+    (tmp_path / "events.json").write_text(json.dumps(
+        {"events": [{"event_id": "paper_p", "meta": {"paper": True}}], "papers": []}))
+    assert status.first_incomplete(ev, paper=True) == "align"
+    assert status.first_incomplete(ev) == "transcribe"          # video default unchanged
+    status.print_status(work_root=tmp_path)
+    line = [l for l in capsys.readouterr().out.splitlines() if l.startswith("paper_p")][0]
+    assert line.rstrip().endswith("align") and "—" in line
