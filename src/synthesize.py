@@ -646,7 +646,7 @@ def paper_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
 def _select_slide_highlights(captions: list[Caption], n: int = 3) -> list[Caption]:
     candidates = [c for c in captions
                   if c.has_diagram and c.visible_text.strip()
-                  and c.caption_status == "ok"]
+                  and c.caption_status == "ok" and c.frame_path]   # render embeds the image
     if not candidates:
         return []
     if len(candidates) <= n:

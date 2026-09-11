@@ -279,7 +279,7 @@ def batch_prefill_chunks(event_id: str, caller, work_root: Path = WORK_ROOT) -> 
     ing = IngestResult.model_validate_json(
         (event_workdir / util.STAGE_INGEST / "manifest.json").read_text())
     if ing.audio_path is None:
-        return 0
+        return 0                                    # notes-only OR URL mode: nothing to prefill
     transcript_dir = event_workdir / util.STAGE_TRANSCRIPT
     transcript_dir.mkdir(parents=True, exist_ok=True)
     chunks = GeminiTranscriber()._chunk_audio(Path(ing.audio_path), transcript_dir)
@@ -314,10 +314,17 @@ def transcribe_one_event(event_id: str, max_sec: Optional[float] = None,
     if not manifest_path.exists():
         raise FileNotFoundError(f"no ingest manifest at {manifest_path} — run --ingest first")
     ing = IngestResult.model_validate_json(manifest_path.read_text())
+    transcriber: Optional[Transcriber] = None
     if ing.audio_path is None:
-        raise RuntimeError(f"{event_id} has no audio (notes-only event)")
+        from src import url_media
+        parts = url_media.url_parts(ing)      # manifest-state selection: URL mode ⇒ URL backend
+        if not parts:
+            raise RuntimeError(f"{event_id} has no audio (notes-only event)")
+        if max_sec is not None:
+            raise RuntimeError(f"{event_id}: --max-sec slicing is not supported in URL mode")
+        transcriber = url_media.URLTranscriber(parts)
 
-    audio_path = Path(ing.audio_path)
+    audio_path = Path(ing.audio_path) if ing.audio_path else None
     duration = ing.duration_sec
     transcript_dir = event_workdir / util.STAGE_TRANSCRIPT
 
@@ -336,5 +343,5 @@ def transcribe_one_event(event_id: str, max_sec: Optional[float] = None,
         transcript_dir = slice_root / util.STAGE_TRANSCRIPT
 
     transcript_dir.mkdir(parents=True, exist_ok=True)
-    segs = transcribe(audio_path, duration, transcript_dir)
+    segs = transcribe(audio_path, duration, transcript_dir, transcriber=transcriber)
     return transcript_dir / "transcript.json", segs

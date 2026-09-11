@@ -303,7 +303,7 @@ def _emit_evidence(segments: list[Segment], captions: list[Caption],
             evidence_id=_evidence_id("slide", sid, cap.t),
             kind="slide", source_id=sid,
             timestamp_start=cap.t, timestamp_end=cap.t,
-            source_asset=str(cap.frame_path),
+            source_asset=str(cap.frame_path) if cap.frame_path else "url",
             text=(cap.visible_text + "\n" + cap.description).strip(),
             confidence=1.0 if cap.caption_status == "ok" else 0.3,
             tags=["has_equation"] * bool(cap.has_equation)

@@ -134,6 +134,9 @@ def batch_prefill_captions(event_id: str, caller, work_root: Path = WORK_ROOT) -
     keyframes_dir.mkdir(parents=True, exist_ok=True)
     ing = IngestResult.model_validate_json(
         (workdir / util.STAGE_INGEST / "manifest.json").read_text())
+    from src import url_media
+    if url_media.url_parts(ing):
+        return 0                                    # URL mode has no frames to prefill
     pending = [(t, png, trig) for (t, png, trig) in _kept_frames(ing, workdir, keyframes_dir)
                if not png.with_suffix(".caption.json").exists()]
 
@@ -166,6 +169,16 @@ def extract_visual(event_id: str, work_root: Path = WORK_ROOT,
     ing = IngestResult.model_validate_json(ingest_manifest.read_text())
     if ing.video_path is None and not ing.video_parts:
         raise RuntimeError(f"{event_id} has no video (notes-only event)")
+
+    from src import url_media
+    parts = url_media.url_parts(ing)          # manifest-state selection: URL mode ⇒ URL backend
+    if parts:
+        captions = url_media.URLDescriber(parts).captions(keyframes_dir)
+        util.write_with_manifest(
+            captions_path,
+            json.dumps([c.model_dump(mode="json") for c in captions], indent=2),
+            stage="visual")
+        return captions
 
     kept = _kept_frames(ing, workdir, keyframes_dir)
 

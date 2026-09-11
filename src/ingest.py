@@ -7,6 +7,11 @@ audio.wav so transcribe/align/synthesize see a single event timeline.
 URL-backed videos (source_url, no path) are fetched first: yt-dlp for YouTube,
 curl for Zoom.
 
+URL mode (hosted runs): ``YT_INPUT=url`` makes YouTube videos NOT download — the manifest
+records the URL + a model-probed duration and no audio/video path; transcribe and visual then
+select their URL backends from that manifest state alone (``url_media.url_parts``). Unset ⇒
+today's download path, byte-identical.
+
 PPTX → text + notes + per-slide PNG. PDF → text + per-page PNG.
 Idempotent: each event/paper writes a manifest.json that short-circuits reruns.
 """
@@ -14,6 +19,7 @@ Idempotent: each event/paper writes a manifest.json that short-circuits reruns.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +33,12 @@ from src.contracts import Asset, Event, IngestResult, VideoPart
 
 
 WORK_ROOT = Path("work")
+
+
+def _url_mode() -> bool:
+    """``YT_INPUT=url`` ⇒ YouTube sources are referenced, not downloaded (read at call time
+    so tests and the nightly runner can flip it per process)."""
+    return os.environ.get("YT_INPUT", "").strip().lower() == "url"
 
 
 def _video_key(asset: Asset) -> str:
@@ -76,6 +88,21 @@ def ingest_event(event: Event, work_root: Path = WORK_ROOT,
     for asset in videos:
         key = _video_key(asset)
         try:
+            already_local = bool(asset.path) and Path(asset.path).exists()
+            if _url_mode() and not already_local and _is_url_source(asset.source_url):
+                from src import url_media
+                dur, _ = url_media.probe_duration(asset.source_url)
+                if not _within_cap(offset, dur, max_total_sec, bool(parts)):
+                    print(f"  [ingest] aggregate cap {max_total_sec:.0f}s reached at "
+                          f"{offset:.0f}s ({len(parts)} videos) — dropping {key} and the rest",
+                          flush=True)
+                    break
+                print(f"  [ingest] {key}: URL mode — no download, duration {dur:.0f}s "
+                      f"(model-probed)", flush=True)
+                parts.append(VideoPart(key=key, path=None, source_url=asset.source_url,
+                                       duration_sec=dur, offset_sec=offset))
+                offset += dur
+                continue
             local = _resolve_video(asset, ingest_dir / "videos" / f"{key}.mp4")
             dur, fps, w, h = _ffprobe(local)
             if not _within_cap(offset, dur, max_total_sec, bool(parts)):
@@ -129,6 +156,10 @@ def ingest_event(event: Event, work_root: Path = WORK_ROOT,
     )
     util.write_with_manifest(manifest, result.model_dump_json(indent=2), stage="ingest")
     return result
+
+
+def _is_url_source(url: Optional[str]) -> bool:
+    return bool(url) and ("youtu.be" in url or "youtube.com" in url)
 
 
 def _resolve_video(asset: Asset, dest: Path) -> Path:

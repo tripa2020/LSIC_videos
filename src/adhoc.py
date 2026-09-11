@@ -291,10 +291,19 @@ def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
     2026-07-05; a one-probe metadata fetch, and the id suffix keeps resume deterministic even
     if the probe fails offline: resume matches any `*<video_id>` folder). Exit is 0 with
     failures reported in the tally, never a batch-aborting code."""
+    from src import telegram
     run_one = run_one or run_adhoc
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    urls = _parse_links(Path(list_file).read_text())
+    list_file = Path(list_file)
+    if telegram.configured():               # phone inbox → links file (append-only; no seen-state)
+        try:
+            n_new = telegram.merge_into_links_file(list_file, telegram.pull_links())
+            print(f"[run-all] inbox: {n_new} new link(s) from Telegram", flush=True)
+        except Exception as e:
+            print(f"[run-all] inbox pull failed ({type(e).__name__}: {e}) — using the file as is",
+                  flush=True)
+    urls = _parse_links(list_file.read_text()) if list_file.exists() else []
     if not urls:
         print(f"[run-all] no links found in {list_file}", flush=True)
         return 1
@@ -327,7 +336,22 @@ def run_adhoc_list(list_file: Path, *, out: Path, profile: str = "lecture",
             print(f"[run-all] ❌ {sub.name} ({type(e).__name__}: {e})", flush=True)
             rc = 1
         results.append((sub.name, "ok" if rc == 0 else "fail"))
+        if rc == 0 and telegram.configured():   # deliver per ✅ so a later crash loses nothing
+            try:
+                sent = telegram.send_bundle(sub, caption=sub.name.split("__")[0].replace("_", " "))
+                print(f"[run-all] 📨 delivered {', '.join(sent) or 'nothing'}", flush=True)
+            except Exception as e:
+                print(f"[run-all] 📨 delivery FAILED for {sub.name} ({type(e).__name__}: {e})",
+                      flush=True)
     _print_batch_summary(out, results)
+    if telegram.configured():
+        n = {s: sum(1 for _, r in results if r == s) for s in ("ok", "skip", "fail")}
+        try:
+            telegram.send_text(f"run-all done — ✅ {n['ok']} · ⏭ {n['skip']} · ❌ {n['fail']}\n"
+                               + "\n".join(f"{'✅' if r == 'ok' else '⏭' if r == 'skip' else '❌'} {v}"
+                                           for v, r in results))
+        except Exception as e:
+            print(f"[run-all] 📨 summary FAILED ({type(e).__name__}: {e})", flush=True)
     (out / "BATCH_DONE").write_text("done\n")
     return 0
 

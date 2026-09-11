@@ -47,7 +47,8 @@ LOCAL_ENV = Path(__file__).resolve().parent.parent / ".env"
 # Keys topped-up onto an already-provisioned VM's .env (append-only; one mechanism for all —
 # per the complexity review, no per-key copy-paste blocks). ANTHROPIC drives the cognition
 # calls; READER_DOMAIN/CURRENT_WORK steer the reader-facing sections (DEPTH v3).
-TOPUP_KEYS = ("ANTHROPIC_API_KEY", "READER_DOMAIN", "CURRENT_WORK")
+TOPUP_KEYS = ("ANTHROPIC_API_KEY", "READER_DOMAIN", "CURRENT_WORK",
+              "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "YT_INPUT")
 
 
 def _local_env_has(key: str) -> bool:

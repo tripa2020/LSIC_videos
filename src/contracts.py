@@ -73,12 +73,12 @@ class Segment(BaseModel):
 
 class Caption(BaseModel):
     t: float
-    frame_path: Path
+    frame_path: Optional[Path] = None      # None for URL-input captions (no frame on disk)
     visible_text: str = ""
     description: str = ""
     has_equation: bool = False
     has_diagram: bool = False
-    trigger: Optional[Literal["scene", "safety", "text-delta", "audio-cue"]] = None
+    trigger: Optional[Literal["scene", "safety", "text-delta", "audio-cue", "url"]] = None
     caption_status: str = "ok"   # "ok" | "failed: <ExceptionType>"
 
 

@@ -95,16 +95,19 @@ def parse_json(text: str | None, *, expect: type | None = None) -> Any:
 
 def generate_json(client, *, model: str, contents: Any, config: Any = None,
                   expect: type | None = None, attempts: int = DEFAULT_ATTEMPTS,
-                  base_delay: float = DEFAULT_BASE_DELAY, tag: str = "gemini") -> Any:
+                  base_delay: float = DEFAULT_BASE_DELAY, tag: str = "gemini",
+                  extra_transient: tuple[str, ...] = ()) -> Any:
     """``generate`` + ``parse_json`` in ONE retry loop: a transient API error and a
     flaky/partial JSON body both re-issue the call on the same ``attempts`` budget.
-    ``MAX_TOKENS`` raises :class:`Truncated` at once (never retried)."""
+    ``MAX_TOKENS`` raises :class:`Truncated` at once (never retried). ``extra_transient``
+    adds call-specific retryable markers (the YouTube-URL preview's spurious 400s)."""
     last_raw = ""
     for attempt in range(attempts):
         try:
             resp = client.models.generate_content(**_gen_kwargs(model, contents, config))
         except Exception as e:                               # noqa: BLE001 — classifier decides
-            if util.is_transient(e) and attempt < attempts - 1:
+            retryable = util.is_transient(e) or any(m in str(e) for m in extra_transient)
+            if retryable and attempt < attempts - 1:
                 print(f"    [{tag}] transient ({str(e)[:70]}) — retry {attempt + 1}/{attempts}",
                       flush=True)
                 time.sleep(base_delay * (attempt + 1))
