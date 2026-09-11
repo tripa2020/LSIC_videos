@@ -128,6 +128,27 @@ def test_transcriber_max_tokens_window_splits_in_half(tmp_path):
     assert [(v.start_offset, v.end_offset) for v in vms] == [("0s", "300s"), ("0s", "150s"), ("150s", "300s")]
 
 
+def _collapsed_rows(n=20):
+    return [{"start": 65.0 + k * 0.01, "end": 65.0 + k * 0.01, "text": f"w{k}"} for k in range(n)]
+
+
+def test_collapsed_window_is_reissued_then_spread(tmp_path):
+    good = [{"start": 3.0, "end": 4.0, "text": "fine"}]
+    # 1) collapsed once, good on re-issue → the re-issued rows win, exactly 2 calls
+    c = _Client([_Resp(json.dumps(_collapsed_rows())), _Resp(json.dumps(good))])
+    segs = url_media.URLTranscriber([_part(300.0)], client=c, concurrency=1).transcribe(None, 300.0, tmp_path)
+    assert [(s.start, s.text) for s in segs] == [(3.0, "fine")] and len(c.calls) == 2
+    # 2) collapsed twice → spread evenly across the window, text + order intact
+    c = _Client([_Resp(json.dumps(_collapsed_rows())), _Resp(json.dumps(_collapsed_rows()))])
+    segs = url_media.URLTranscriber([_part(300.0, key="k2")], client=c, concurrency=1).transcribe(None, 300.0, tmp_path)
+    assert len(segs) == 20 and [s.text for s in segs] == [f"w{k}" for k in range(20)]
+    assert segs[0].start == 0.0 and segs[-1].end == 300.0 and segs[10].start == 150.0
+    # 3) a short/sparse window is never 'collapsed' (no spurious re-issue)
+    c = _Client([_Resp(json.dumps(_collapsed_rows(5)))])
+    url_media.URLTranscriber([_part(300.0, key="k3")], client=c, concurrency=1).transcribe(None, 300.0, tmp_path)
+    assert len(c.calls) == 1
+
+
 def test_spurious_400_is_retried_on_url_calls(tmp_path):
     c = _Client([RuntimeError("400 INVALID_ARGUMENT. Request contains an invalid argument."),
                  _Resp(json.dumps([{"start": 0.0, "end": 1.0, "text": "ok"}]))])

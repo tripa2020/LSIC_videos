@@ -114,6 +114,31 @@ def probe_duration(url: str, client=None, model: str = GEMINI_MODEL) -> tuple[fl
     return dur, int(d.get("speakers") or 0)
 
 
+COLLAPSE_MIN_SEGS = 10
+COLLAPSE_SPAN_FRACTION = 0.2
+
+
+def _collapsed(segs: list[Segment], window_len: float) -> bool:
+    """True when many segments share a tiny time span — the model lost the clip timeline
+    (content is intact, timestamps are not). Short/sparse windows are never 'collapsed'."""
+    if len(segs) < COLLAPSE_MIN_SEGS or window_len <= 0:
+        return False
+    span = max(s.end for s in segs) - min(s.start for s in segs)
+    return span < COLLAPSE_SPAN_FRACTION * window_len
+
+
+def _spread(segs: list[Segment], abs_off: float, window_len: float) -> list[Segment]:
+    """Degrade: keep text + order, place segments evenly across the window (each gets
+    ~window_len / n seconds) so downstream citations point into the right region."""
+    n = len(segs)
+    step = window_len / n
+    out = []
+    for k, s in enumerate(segs):
+        out.append(s.model_copy(update={"start": abs_off + k * step,
+                                        "end": abs_off + (k + 1) * step}))
+    return out
+
+
 def _parallel(fn: Callable, items: list, workers: int) -> dict[int, Any]:
     """Run fn(i, item) for every item, up to ``workers`` at a time; {i: result}."""
     out: dict[int, Any] = {}
@@ -176,6 +201,14 @@ class URLTranscriber:
             return segs
         print(f"  [transcribe/url] window {i + 1} @ {abs_off:.0f}s … start", flush=True)
         segs = transcribe._transcribe_segment((url, start, end), abs_off, self._call_api, self._split)
+        if _collapsed(segs, end - start):    # observed 2026-09-11: 76 segs squeezed into 5 s
+            print(f"  [transcribe/url] window {i + 1}: timestamps collapsed — re-issuing once",
+                  flush=True)
+            segs = transcribe._transcribe_segment((url, start, end), abs_off, self._call_api, self._split)
+            if _collapsed(segs, end - start):
+                print(f"  [transcribe/url] window {i + 1}: still collapsed — spreading evenly "
+                      f"(citations approximate in this window)", flush=True)
+                segs = _spread(segs, abs_off, end - start)
         hi = abs_off + (end - start)
         for s in segs:                       # per-window clamp: clip-relative timestamps overshoot
             s.start = max(abs_off, min(s.start, hi))

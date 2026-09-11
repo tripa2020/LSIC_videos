@@ -258,6 +258,8 @@ LSIC_videos/
 │   ├── segment.py          size-bounded windowing (WINDOW_BUDGET = 45k chars)
 │   ├── synth_mapreduce.py  MAPRED map/reduce calls (fakes-injectable, no import cycle)
 │   ├── gemini_caller.py    the ONE Gemini seam — key, client, retry, JSON parse, fail-fast
+│   ├── url_media.py        URL-input backends (YT_INPUT=url): Gemini reads the YouTube URL, no download
+│   ├── telegram.py         phone inbox (links) + delivery (bundles) — one Bot API module
 │   ├── anthropic_caller.py scoped Claude caller for the cognition call
 │   ├── remote.py           --remote GCP VM orchestration
 │   └── batch_gemini.py     Gemini Batch API cache pre-fill (--batch)
