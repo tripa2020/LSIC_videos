@@ -24,11 +24,9 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 
-from src import util
+from src import gemini_caller, util
 from src.contracts import (
     AlignmentResult, Asset, Caption, Evidence, IngestResult,
     Presentation, Segment,
@@ -206,9 +204,8 @@ def synthesize_thin(
         languages=",".join(languages) or "en",
     )
 
-    resp = client.models.generate_content(
-        model=SYNTH_MODEL,
-        contents=[user_prompt],
+    resp = gemini_caller.generate(
+        client, model=SYNTH_MODEL, contents=[user_prompt],
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             temperature=0.0,
@@ -381,6 +378,8 @@ def synthesize_full(event_id: str, work_root: Path = Path("work"),
     # profile's Outline + description links). Briefing ignores it via **_kwargs.
     video_asset = next((a for a in event.assets if a.kind == "video"), None)
     source_meta = (video_asset.meta if video_asset else None) or {}
+    if video_asset is None:   # video-less (paper) event: the event meta IS the source info
+        source_meta = event.meta or {}
     notes_md = prof.render(
         ing=ing, alignment=alignment, pres_outputs=pres_outputs,
         thematic=thematic, slide_highlights=slide_highlights,
@@ -450,64 +449,33 @@ def _load_deck_text(workdir: Path, assets: list[Asset]) -> dict[str, str]:
     return out
 
 
-def _gemini_client() -> genai.Client:
-    load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set in .env")
-    return genai.Client(api_key=api_key,
-                        http_options=types.HttpOptions(timeout=300_000))
+SYNTH_TIMEOUT_MS = 300_000
 
 
-def _synth_transient(e: Exception) -> bool:
-    """Retryable Gemini/network/DNS errors — delegates to the shared classifier."""
-    return util.is_transient(e)
+def _gemini_client():
+    """Synthesis-sized Gemini client (kept as a module seam — tests monkeypatch it)."""
+    return gemini_caller.make_client(timeout_ms=SYNTH_TIMEOUT_MS)
 
 
-def _call_gemini_json(client: genai.Client, system: str, user: str,
+def _call_gemini_json(client, system: str, user: str,
                       max_tokens: int = 6000, model: str = SYNTH_MODEL) -> dict:
-    import time as _t
+    """One JSON-object synthesis call. Retry/parse policy lives in ``gemini_caller``; a
+    ``MAX_TOKENS`` truncation raises ``gemini_caller.Truncated`` at once (fail fast — the old
+    loop re-issued the identical call up to 5× at full price)."""
     thinking_budget = 0 if "flash" in model else 4096  # Pro requires thinking; Flash allows 0
-    raw, resp = "", None
-    for attempt in range(5):
-        try:
-            resp = client.models.generate_content(
-                model=model,
-                contents=[user],
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
-                    max_output_tokens=max_tokens,
-                    response_mime_type="application/json",
-                ),
-            )
-            raw = util.strip_fences(resp.text or "")
-            data = json.loads(raw)
-            if not isinstance(data, dict):   # a JSON array/scalar would crash the caller's .update()
-                raise ValueError(f"non-object JSON ({type(data).__name__})")
-            return data
-        except (json.JSONDecodeError, ValueError) as e:  # flaky/truncated JSON → retry the whole call
-            if attempt < 4:
-                _t.sleep(5 * (attempt + 1))
-                continue
-            dump = Path("/tmp/synthesize_failed_response.txt")
-            dump.write_text(raw)
-            finish = getattr(resp.candidates[0], "finish_reason", "?") if (resp and resp.candidates) else "?"
-            truncated = str(finish) == "MAX_TOKENS"
-            raise RuntimeError(
-                f"Gemini returned invalid JSON after 5 tries "
-                f"({'TRUNCATED at max_output_tokens' if truncated else e}); "
-                f"full response dumped to {dump}"
-            ) from e
-        except Exception as e:  # transient overload/disconnect → backoff + retry
-            if _synth_transient(e) and attempt < 4:
-                _t.sleep(5 * (attempt + 1))
-                continue
-            raise
+    return gemini_caller.generate_json(
+        client, model=model, contents=[user],
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+            max_output_tokens=max_tokens,
+            response_mime_type="application/json",
+        ),
+        expect=dict, tag="synthesize")
 
 
-def _call_presentation(client: genai.Client, p: Presentation,
+def _call_presentation(client: Any, p: Presentation,
                        alignment: AlignmentResult, evidence: list[Evidence],
                        deck_text: str) -> dict:
     # Pull transcript evidence inside this presentation's window
@@ -564,7 +532,7 @@ def _build_event_context(alignment: AlignmentResult, evidence: list[Evidence],
     return "\n".join(ctx_lines)[:cap]
 
 
-def _call_thematic(client: genai.Client, alignment: AlignmentResult,
+def _call_thematic(client: Any, alignment: AlignmentResult,
                    evidence: list[Evidence], role_pool: list[dict],
                    pres_outputs: list[dict],
                    system_prompt: str = THEMATIC_SYSTEM_PROMPT) -> dict:
@@ -592,7 +560,7 @@ def _call_thematic(client: genai.Client, alignment: AlignmentResult,
 class SynthesisContext:
     """Everything a profile's ``synthesize`` needs — assembled once by ``synthesize_full`` (the
     profile-agnostic scaffolding) and handed to the profile. No mode-branch lives in the caller."""
-    client: genai.Client
+    client: Any
     alignment: AlignmentResult
     evidence: list[Evidence]
     guest_pres: list[Presentation]
@@ -644,6 +612,30 @@ def lecture_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
         thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
                                   system_prompt=lecture.thematic_prompt())
     # hand the descriptive claims to the cognition layer so it tags THOSE by evidence_id
+    full_ctx = _build_event_context(ctx.alignment, ctx.evidence, cap=cognition.CONTEXT_CAP)
+    thematic.update(cognition.run(full_ctx, claims=thematic.get("notable_claims") or [],
+                                  reader_domain=ctx.reader_domain,
+                                  current_work=ctx.current_work))
+    return thematic, []
+
+
+def paper_synthesize(ctx: "SynthesisContext") -> tuple[dict, list[dict]]:
+    """The paper profile owns its synthesis — the lecture flow with the paper descriptive
+    prompt. Evidence here is page-anchored (``paper_align`` puts the page number in the
+    timestamp float), which the windowing, context builder, and cognition core all treat as
+    the plain ordering number it is. No presentations, no role pool."""
+    from src.profiles import paper
+    from src import cognition
+    from src import segment as _segment
+    windows = _segment.segment(ctx.evidence)
+    if len(windows) >= 2:
+        from src import synth_mapreduce
+        thematic = synth_mapreduce.mapreduce_thematic(
+            ctx.client, windows, paper.thematic_prompt(), _call_gemini_json)
+    else:
+        print("  [synthesize] thematic synthesis (descriptive, 1 call)…", flush=True)
+        thematic = _call_thematic(ctx.client, ctx.alignment, ctx.evidence, [], [],
+                                  system_prompt=paper.thematic_prompt())
     full_ctx = _build_event_context(ctx.alignment, ctx.evidence, cap=cognition.CONTEXT_CAP)
     thematic.update(cognition.run(full_ctx, claims=thematic.get("notable_claims") or [],
                                   reader_domain=ctx.reader_domain,
@@ -902,5 +894,7 @@ def synthesize(*args, **kwargs):
     return synthesize_full(*args, **kwargs)
 
 
-def synthesize_paper(*args, **kwargs):
-    raise NotImplementedError("synthesize_paper lands at M5b — see PLAN.md")
+def synthesize_paper(event_id: str, work_root: Path = Path("work")) -> Path:
+    """M5b landed as the paper PROFILE (adhoc paper flow): pages → ``paper_align`` →
+    ``synthesize_full(profile="paper")``. This alias keeps the old entry-point name alive."""
+    return synthesize_full(event_id, work_root=work_root, profile="paper")

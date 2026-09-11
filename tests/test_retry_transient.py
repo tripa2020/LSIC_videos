@@ -144,14 +144,28 @@ def test_vlm_curate_retries_transient_then_parses(tmp_path, monkeypatch):
     assert describer.client.models.calls == [1, 1]   # called exactly twice (1 retry)
 
 
-def test_vlm_curate_does_not_retry_non_transient(tmp_path, monkeypatch):
-    """A 200 that yields malformed JSON is a non-transient parse error — NOT retried."""
+def test_vlm_curate_retries_malformed_body_then_fails_loud(tmp_path, monkeypatch):
+    """A 200 with a malformed JSON body re-issues on the shared budget (gemini_caller unifies
+    the policy across stages — synth/transcribe already did this) and then raises loud."""
+    pytest.importorskip("google.genai")
+    from src import gemini_caller, slide_book
+    monkeypatch.setattr(util.time, "sleep", lambda _s: None)
+    png = tmp_path / "slide.png"
+    png.write_bytes(b"\x89PNG fake")
+    describer = _FakeDescriber([_FakeResp("not json at all {{{")] * gemini_caller.DEFAULT_ATTEMPTS)
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        slide_book._vlm_curate(describer, png)
+    assert describer.client.models.calls == [1] * gemini_caller.DEFAULT_ATTEMPTS
+
+
+def test_vlm_curate_non_transient_api_error_not_retried(tmp_path, monkeypatch):
+    """A non-transient API exception (no transient marker) propagates on the first call."""
     pytest.importorskip("google.genai")
     from src import slide_book
     monkeypatch.setattr(util.time, "sleep", lambda _s: None)
     png = tmp_path / "slide.png"
     png.write_bytes(b"\x89PNG fake")
-    describer = _FakeDescriber([_FakeResp("not json at all {{{")])
-    with pytest.raises(Exception):   # json.loads raises; classifier sees no marker → no retry
+    describer = _FakeDescriber([ValueError("INVALID_ARGUMENT: bad image")])
+    with pytest.raises(ValueError):
         slide_book._vlm_curate(describer, png)
-    assert describer.client.models.calls == [1]   # exactly one call, no retry
+    assert describer.client.models.calls == [1]

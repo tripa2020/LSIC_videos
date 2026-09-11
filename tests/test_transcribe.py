@@ -9,7 +9,7 @@ import pytest
 
 from src.contracts import Segment
 from src.transcribe import (
-    _opus_cmd, _parse_segments, _reassemble, _transcribe_segment, _transient,
+    _opus_cmd, _parse_segments, _reassemble, _transcribe_segment,
 )
 
 
@@ -59,6 +59,7 @@ def test_reassemble_sorts_clamps_drops():
 # --- #4 transient classifier ---
 
 def test_transient_classifier():
+    from src.util import is_transient as _transient
     assert _transient(RuntimeError("503 UNAVAILABLE"))
     assert _transient(Exception("Server disconnected without sending a response"))
     assert _transient(Exception("The read operation timed out"))

@@ -251,11 +251,13 @@ The pending EVAL milestone turns this into a deterministic, CI-able scorer
 ```
 LSIC_videos/
 ├── src/                    the pipeline
-│   ├── main.py             CLI — all modes and stages
+│   ├── main.py             CLI — all modes; event_stages() builds the ONE stage chain
+│   ├── status.py           stage-completion matrix + stage_names(paper): the single stage order
 │   ├── contracts.py        pydantic schemas at every stage seam
-│   ├── profiles/           briefing (LSIC) vs lecture (generic talk) templates + prompts
+│   ├── profiles/           briefing (LSIC) vs lecture (generic talk) vs paper templates + prompts
 │   ├── segment.py          size-bounded windowing (WINDOW_BUDGET = 45k chars)
 │   ├── synth_mapreduce.py  MAPRED map/reduce calls (fakes-injectable, no import cycle)
+│   ├── gemini_caller.py    the ONE Gemini seam — key, client, retry, JSON parse, fail-fast
 │   ├── anthropic_caller.py scoped Claude caller for the cognition call
 │   ├── remote.py           --remote GCP VM orchestration
 │   └── batch_gemini.py     Gemini Batch API cache pre-fill (--batch)

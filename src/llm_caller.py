@@ -71,9 +71,11 @@ class SyncCaller:
         self.client = client
 
     def generate_many(self, requests: list[LLMRequest]) -> dict[str, Any]:
+        from src import gemini_caller
         out: dict[str, Any] = {}
         for r in requests:
-            out[r.custom_id] = self.client.models.generate_content(**_gen_kwargs(r))
+            out[r.custom_id] = gemini_caller.generate(
+                self.client, model=r.model, contents=r.contents, config=r.config)
         return out
 
 

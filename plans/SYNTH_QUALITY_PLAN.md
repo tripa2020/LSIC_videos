@@ -357,6 +357,11 @@ the VM's `src.main --source` run forces references on via `adhoc.run_adhoc`.
     parsed by a small `_parse_links` function in `adhoc.py` (CR4 — no shallow links module).
     Repo-root default so the command needs zero args. URLs route through the existing `--source`
     adhoc path — **NOT** the catalog machinery.
+  - *Papers too (added 2026-07-26):* an arXiv / `.pdf` line routes to `run_adhoc_paper`
+    (`adhoc.is_paper_source`) — PDF cached under `work/adhoc_sources/`, page-anchored align
+    (`src/paper_align.py`), `paper` profile synthesis with `[p.N]` citations, same eval gates
+    in page units, same subject-named output folder + cross-day resume (date-free
+    `paper_arxiv_*` id). Video lines are untouched (degrade-to-today).
   - *Command:* `python -m src.main --source-list [FILE=links.txt]` + a 2-line `./run_all` alias
     (pure `exec` of the same path — an alias, not a second command path). `--local` opt-out
     (default `--remote`); `--redo` forces re-run.
